@@ -5,6 +5,8 @@ import argparse
 import matplotlib.pyplot as plt
 import pandas as pd
 
+# Embed fonts in the output file
+plt.rcParams['pdf.fonttype'] = 42
 
 def plot_reward(progress_dir: str, subdir: str, label: str, plotted_iterations: int) -> None:
     progress_file = f"{progress_dir}/{subdir}/result.json"
