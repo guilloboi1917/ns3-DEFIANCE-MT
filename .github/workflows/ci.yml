@@ -1,0 +1,157 @@
+name: DEFIANCE CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: defiance-project/ns3-defiance
+  NS3_HOME: source/ns-3.40
+  CCACHE_BASEDIR_VALUE: ns-3-ccache-storage
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-python:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/defiance-project/bake-defiance:full-latest
+      env:
+        NS3_HOME: ${{ env.NS3_HOME }}
+        CCACHE_BASEDIR_VALUE: ${{ env.CCACHE_BASEDIR_VALUE }}
+
+    steps:
+      - name: Activate repository
+        run: ln -s /code/source .
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          path: ${{ env.NS3_HOME }}/contrib/defiance
+          clean: false
+
+      - name: Install Python dependencies
+        working-directory: ${{ env.NS3_HOME }}/contrib/defiance
+        run: |
+          poetry install --with dev,test
+
+      - name: Lint Python
+        working-directory: ${{ env.NS3_HOME }}/contrib/defiance
+        run: |
+          source .venv/bin/activate
+          mkdir -p .mypy_cache
+          ruff check
+          ruff format --check --diff
+          mypy --install-types --non-interactive
+        shell: bash
+
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/defiance-project/bake-defiance:full-latest
+      env:
+        NS3_HOME: ${{ env.NS3_HOME }}
+        CCACHE_BASEDIR_VALUE: ${{ env.CCACHE_BASEDIR_VALUE }}
+
+    steps:
+      - name: Activate repository
+        run: ln -s /code/source .
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          path: ${{ env.NS3_HOME }}/contrib/defiance
+          clean: false
+
+      - name: Setup ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_BASEDIR_VALUE }}
+          key: ${{ runner.os }}-ccache-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-
+
+      - name: Build NS-3 with ccache
+        run: |
+          mkdir -p $CCACHE_BASEDIR_VALUE
+          export CCACHE_BASEDIR=$GITHUB_WORKSPACE
+          export CCACHE_DIR=$GITHUB_WORKSPACE/$CCACHE_BASEDIR_VALUE
+          export CCACHE_SLOPPINESS=pch_defines,time_macros
+          cd $NS3_HOME
+          ccache -s -v
+          ./ns3 build
+          ccache -s -v
+
+          tar cfz $GITHUB_WORKSPACE/ns3.tar.gz .
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ns3-build
+          path: ns3.tar.gz
+
+  test:
+    needs: [build]
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/defiance-project/bake-defiance:latest
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ns3-build
+          path: /code
+
+      - name: Setup test environment
+        run: |
+          mkdir -p /code/${{ env.NS3_HOME }}
+          tar xfz /code/ns3.tar.gz -C /code/${{ env.NS3_HOME }}
+          ln -s /code/${{ env.NS3_HOME }} ns-3
+          export NS3_HOME=$(realpath ns-3)
+          echo "NS3_HOME=$NS3_HOME" >> $GITHUB_ENV
+          cd $NS3_HOME/contrib/defiance
+          poetry install --with test
+
+      - name: Run Python tests
+        working-directory: ${{ env.NS3_HOME }}
+        run: |
+          source contrib/defiance/.venv/bin/activate
+          chmod +x ./ns3
+          pip install pytest-timeout
+          pytest contrib/defiance -v -s --timeout=5
+        shell: bash
+
+      - name: Run NS-3 tests
+        working-directory: ${{ env.NS3_HOME }}
+        run: |
+          export NS3_HOME=$GITHUB_WORKSPACE/$NS3_HOME
+          ./test.py -s "defiance*"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            testpy-output/
+            **/test-results.xml
+            **/coverage.xml
+
+  #trigger-parent:
+  #  if: github.ref == 'refs/heads/main'
+  #  needs: [test]
+  #  runs-on: ubuntu-latest
+  #  steps:
+  #    - name: Trigger parent repository build
+  #      uses: peter-evans/repository-dispatch@v2
+  #      with:
+  #        token: ${{ secrets.GITHUB_TOKEN }}
+  #        repository: ${{ github.repository_owner }}/bake-defiance
+  #        event-type: submodule-defiance-update
+  #        client-payload: '{"sha": "${{ github.sha }}", "ref": "${{ github.ref }}"}'

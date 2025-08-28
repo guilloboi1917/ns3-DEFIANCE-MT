@@ -1,0 +1,77 @@
+name: Documentation
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  NS3_HOME: source/ns-3.40
+
+jobs:
+  documentation:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}:latest
+
+    steps:
+      - name: Checkout parent repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/bake-defiance
+          submodules: recursive
+
+      - name: Setup DEFIANCE module
+        run: |
+          shopt -s extglob
+          rm -rf $NS3_HOME/contrib/defiance
+          mkdir -p $NS3_HOME/contrib/defiance
+          mv !(source|Makefile) $NS3_HOME/contrib/defiance/
+          make bootstrap -o bakefile.xml -o bake/bake.py
+
+      - name: Generate documentation
+        working-directory: ${{ env.NS3_HOME }}/contrib/defiance
+        run: |
+          # Build documentation
+          cd doc
+          doxygen doxygen.conf
+          
+          # Build Sphinx docs
+          make html
+          make latexpdf
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Build with Jekyll
+        uses: actions/jekyll-build-pages@v1
+        with:
+          source: ./
+          destination: ./_site
+
+      - name: Upload Pages artifacts
+        uses: actions/upload-pages-artifact@v3
+        with:
+          name: github-pages
+          path: ./_site/
+
+      - name: Deploy to Pages
+        if: github.ref == 'refs/heads/main'
+        uses: actions/deploy-pages@v4
+        with:
+          artifact_name: github-pages
+
+  pages-build-deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: [documentation]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v2
