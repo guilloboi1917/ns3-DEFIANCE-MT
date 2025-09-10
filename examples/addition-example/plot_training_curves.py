@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 # Embed fonts in the output file
-plt.rcParams['pdf.fonttype'] = 42
+plt.rcParams["pdf.fonttype"] = 42
 
 parser = argparse.ArgumentParser(description="Visualize training curves of addition example runs.")
 parser.add_argument(
