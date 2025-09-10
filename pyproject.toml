@@ -102,6 +102,11 @@ types-requests = "*"
 types-setuptools = "*"
 types-tqdm = "*"
 types-defusedxml = "*"
+types-six = "*"
+types-openpyxl = "*"
+types-docutils = "*"
+types-Pygments = "*"
+types-jsonschema = "*"
 
 [tool.poetry.group.test]
 optional = true
