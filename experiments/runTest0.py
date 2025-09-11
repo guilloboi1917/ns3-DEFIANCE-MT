@@ -1,7 +1,7 @@
 import json
 import logging
 import os
-from typing import Any
+from typing import Any, SupportsFloat
 
 import gymnasium as gym
 import ns3ai_gym_env  # noqa: F401  # import to register env
@@ -34,11 +34,11 @@ if __name__ == "__main__":
         "distances": [],
     }
 
-    env = TimeLimit(
+    env: gym.Env = TimeLimit(
         gym.make(
             "ns3ai_gym_env/Ns3-v0",
             targetName="defiance-lte-learning",
-            ns3Path=".",
+            ns3Path=NS3_HOME,
             ns3Settings=settings,
         ),
         max_episode_steps=100,
@@ -50,7 +50,7 @@ if __name__ == "__main__":
         logger.info("Initial Observations after Env was reset %s", obs)
         logger.info("Initial Info after Env was reset %s", info)
 
-        reward = 0
+        reward: SupportsFloat = 0
         done = False
 
         for steps in range(2500):
