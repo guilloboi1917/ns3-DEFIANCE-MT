@@ -266,12 +266,12 @@ class DataCollectorAppTestSuite : public TestSuite
 };
 
 DataCollectorAppTestSuite::DataCollectorAppTestSuite()
-    : TestSuite("defiance-data-collector-application", UNIT)
+    : TestSuite("defiance-data-collector-application", Type::UNIT)
 {
-    AddTestCase(new DataCollectorAppOneInterfaceTestCase, TestCase::QUICK);
-    AddTestCase(new DataCollectorAppAllInterfacesTestCase, TestCase::QUICK);
-    AddTestCase(new DataCollectorAppOneAppTestCase, TestCase::QUICK);
-    AddTestCase(new DataCollectorAppDynamicTestCase, TestCase::QUICK);
+    AddTestCase(new DataCollectorAppOneInterfaceTestCase, Duration::QUICK);
+    AddTestCase(new DataCollectorAppAllInterfacesTestCase, Duration::QUICK);
+    AddTestCase(new DataCollectorAppOneAppTestCase, Duration::QUICK);
+    AddTestCase(new DataCollectorAppDynamicTestCase, Duration::QUICK);
 }
 
 static DataCollectorAppTestSuite

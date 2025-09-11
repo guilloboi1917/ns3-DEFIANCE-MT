@@ -260,9 +260,9 @@ class AgentAppTestSuite : public TestSuite
 };
 
 AgentAppTestSuite::AgentAppTestSuite()
-    : TestSuite("defiance-agent-application", UNIT)
+    : TestSuite("defiance-agent-application", Type::UNIT)
 {
-    AddTestCase(new AgentAppTestCase, TestCase::QUICK);
+    AddTestCase(new AgentAppTestCase, Duration::QUICK);
 }
 
 static AgentAppTestSuite sAgentAppTestSuite; //!< Static variable for test initialization

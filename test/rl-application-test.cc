@@ -169,10 +169,10 @@ class RlAppTestSuite : public TestSuite
 };
 
 RlAppTestSuite::RlAppTestSuite()
-    : TestSuite("defiance-rl-application", UNIT)
+    : TestSuite("defiance-rl-application", Type::UNIT)
 {
-    AddTestCase(new RlAppSendTestCase, TestCase::QUICK);
-    AddTestCase(new RlAppStopTestCase, TestCase::QUICK);
+    AddTestCase(new RlAppSendTestCase, Duration::QUICK);
+    AddTestCase(new RlAppStopTestCase, Duration::QUICK);
 }
 
 static RlAppTestSuite sRlAppTestSuite; //!< Static variable for test initialization

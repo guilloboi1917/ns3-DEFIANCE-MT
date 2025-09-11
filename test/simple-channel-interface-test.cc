@@ -351,10 +351,10 @@ class SimpleChannelInterfaceTestSuite : public TestSuite
 };
 
 SimpleChannelInterfaceTestSuite::SimpleChannelInterfaceTestSuite()
-    : TestSuite("defiance-simple-channel-interface", UNIT)
+    : TestSuite("defiance-simple-channel-interface", Type::UNIT)
 {
-    AddTestCase(new SimpleChannelInterfaceConnectTestCase, TestCase::QUICK);
-    AddTestCase(new SimpleChannelInterfaceReceiveTestCase, TestCase::QUICK);
+    AddTestCase(new SimpleChannelInterfaceConnectTestCase, Duration::QUICK);
+    AddTestCase(new SimpleChannelInterfaceReceiveTestCase, Duration::QUICK);
 }
 
 static SimpleChannelInterfaceTestSuite

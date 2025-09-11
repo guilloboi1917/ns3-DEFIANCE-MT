@@ -301,7 +301,6 @@ NS_OBJECT_ENSURE_REGISTERED(InferenceAgentApp);
 int
 main(int argc, char* argv[])
 {
-    NS_LOG_APPEND_TIME_PREFIX;
     // LogComponentEnable("SocketChannelInterface", ns3::LOG_LEVEL_ALL);
     // LogComponentEnable("EnvironmentCreator", ns3::LOG_LEVEL_ALL);
     // LogComponentEnable("Socket", ns3::LOG_LEVEL_ALL);

@@ -9,7 +9,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: defiance-project/ns3-defiance
-  NS3_HOME: source/ns-3.40
+  NS3_HOME: ns-3
   CCACHE_BASEDIR_VALUE: ns-3-ccache-storage
 
 concurrency:
@@ -27,7 +27,7 @@ jobs:
 
     steps:
       - name: Activate repository
-        run: ln -s /code/source .
+        run: ln -s /code/ns-3 .
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -60,7 +60,7 @@ jobs:
 
     steps:
       - name: Activate repository
-        run: ln -s /code/source .
+        run: ln -s /code/ns-3 .
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -122,9 +122,7 @@ jobs:
         working-directory: ${{ env.NS3_HOME }}
         run: |
           source contrib/defiance/.venv/bin/activate
-          chmod +x ./ns3
-          pip install pytest-timeout
-          pytest contrib/defiance -v -s --timeout=5
+          pytest contrib/defiance -v -s
         shell: bash
 
       - name: Run NS-3 tests

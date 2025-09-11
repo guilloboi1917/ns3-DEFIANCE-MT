@@ -321,10 +321,10 @@ class CommunicationTestSuite : public TestSuite
 };
 
 CommunicationTestSuite::CommunicationTestSuite()
-    : TestSuite("defiance-communication", UNIT)
+    : TestSuite("defiance-communication", Type::UNIT)
 {
-    AddTestCase(new CommunicationTestCase, TestCase::QUICK);
-    AddTestCase(new DynamicInterfacesTestCase, TestCase::QUICK);
+    AddTestCase(new CommunicationTestCase, Duration::QUICK);
+    AddTestCase(new DynamicInterfacesTestCase, Duration::QUICK);
 }
 
 static CommunicationTestSuite sCommunicationTestSuite; //!< Static variable for test initialization

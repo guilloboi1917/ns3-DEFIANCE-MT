@@ -87,9 +87,9 @@ class ActionAppTestSuite : public TestSuite
 };
 
 ActionAppTestSuite::ActionAppTestSuite()
-    : TestSuite("defiance-action-application", UNIT)
+    : TestSuite("defiance-action-application", Type::UNIT)
 {
-    AddTestCase(new ActionAppTestCase, TestCase::QUICK);
+    AddTestCase(new ActionAppTestCase, Duration::QUICK);
 }
 
 static ActionAppTestSuite sActionAppTestSuite; //!< Static variable for test initialization

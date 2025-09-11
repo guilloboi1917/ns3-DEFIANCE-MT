@@ -274,9 +274,9 @@ class SocketChannelInterfaceTestSuite : public TestSuite
 };
 
 SocketChannelInterfaceTestSuite::SocketChannelInterfaceTestSuite()
-    : TestSuite("defiance-socket-channel-interface", UNIT)
+    : TestSuite("defiance-socket-channel-interface", Type::UNIT)
 {
-    AddTestCase(new SocketChannelInterfaceTestCase, TestCase::QUICK);
+    AddTestCase(new SocketChannelInterfaceTestCase, Duration::QUICK);
 }
 
 static SocketChannelInterfaceTestSuite

@@ -18,9 +18,9 @@ class RandomObservationApp : public ObservationApplication
      * Assigns stream number to UniformRandomVariable used to
      * generate observations.
      *
-     * \param streamNumber the stream number to assign
+     * \param stream the stream number to assign
      */
-    void AssignStreams(int64_t streamNumber);
+    int64_t AssignStreams(int64_t stream) override;
 
   private:
     /// random variable stream for random observation.

@@ -13,7 +13,7 @@ using namespace ns3;
 class SimpleMarlInterfaceTestSuite : public TestSuite
 {
   public:
-    SimpleMarlInterfaceTestSuite(std::string name = "marl-interface", Type type = UNIT);
+    SimpleMarlInterfaceTestSuite(std::string name = "marl-interface", Type type = Type::UNIT);
 
   protected:
     void SetupCallbacks();
@@ -75,7 +75,7 @@ class EchoMarlInterfaceTestSuite : public SimpleMarlInterfaceTestSuite
 {
   public:
     EchoMarlInterfaceTestSuite()
-        : SimpleMarlInterfaceTestSuite("marl-echo-action-interface", UNIT)
+        : SimpleMarlInterfaceTestSuite("marl-echo-action-interface", Type::UNIT)
     {
     }
 
@@ -241,7 +241,7 @@ class MarlAgentInterfaceTestSuite : public SimpleMarlInterfaceTestSuite
 {
   public:
     MarlAgentInterfaceTestSuite()
-        : SimpleMarlInterfaceTestSuite("marl-agent-interface", UNIT)
+        : SimpleMarlInterfaceTestSuite("marl-agent-interface", Type::UNIT)
     {
     }
 

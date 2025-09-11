@@ -230,9 +230,9 @@ class HistoryContainerTestSuite : public TestSuite
 };
 
 HistoryContainerTestSuite::HistoryContainerTestSuite()
-    : TestSuite("defiance-history-container", UNIT)
+    : TestSuite("defiance-history-container", Type::UNIT)
 {
-    AddTestCase(new HistoryContainerTest, TestCase::QUICK);
+    AddTestCase(new HistoryContainerTest, Duration::QUICK);
 }
 
 static HistoryContainerTestSuite
