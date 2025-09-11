@@ -1,11 +1,12 @@
 #ifndef PC_ENVIRONMENT_H
 #define PC_ENVIRONMENT_H
 
+#include "base-environment.h"
+#include "device-manager.h"
+
 #include <ns3/ai-module.h>
 #include <ns3/applications-module.h>
-#include <ns3/base-environment.h>
 #include <ns3/core-module.h>
-#include <ns3/device-manager.h>
 #include <ns3/mobility-helper.h>
 #include <ns3/point-to-point-module.h>
 

@@ -13,7 +13,6 @@
 #include "ns3/point-to-point-module.h"
 #include <ns3/communication-helper.h>
 #include <ns3/rl-application-helper.h>
-#include <ns3/topology-creator.h>
 
 #include <cstdint>
 #include <string>

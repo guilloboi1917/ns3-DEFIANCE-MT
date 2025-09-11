@@ -16,55 +16,38 @@ build_lib(
             model/action-application.cc
             model/agent-application.cc
             model/aggregated-info.cc
-            model/base-environment.cc
             model/base-test.cc
             model/channel-interface.cc
             model/data-collector-application.cc
-            model/environment-creator.cc
             model/history-container.cc
             model/observation-application.cc
-            model/pendulum-cart.cc
             model/reward-application.cc
             model/rl-application-container.cc
             model/rl-application.cc
             model/simple-channel-interface.cc
             model/socket-channel-interface.cc
-            model/static-environment.cc
-            model/sumo-environment.cc
             helper/communication-helper.cc
-            helper/device-manager.cc
             helper/rl-application-helper.cc
-            helper/topology-creator.cc
     HEADER_FILES
             model/action-application.h
             model/agent-application.h
             model/aggregated-info.h
-            model/base-environment.h
             model/base-test.h
             model/channel-interface.h
             model/data-collector-application.h
-            model/environment-creator.h
             model/history-container.h
             model/observation-application.h
-            model/pendulum-cart.h
             model/reward-application.h
             model/rl-application-container.h
             model/rl-application.h
             model/simple-channel-interface.h
             model/socket-channel-interface.h
-            model/static-environment.h
-            model/sumo-environment.h
             helper/communication-helper.h
-            helper/defiance-helper.h
-            helper/device-manager.h
             helper/rl-application-helper.h
-            helper/topology-creator.h
     LIBRARIES_TO_LINK
             ${libai}
             ${libcore}
-            ${libflow-monitor}
-            ${libinternet-apps}
-            ${liblte}
+            ${libinternet}
             ${python_libraries}
     TEST_SOURCES
             test/action-application-test.cc

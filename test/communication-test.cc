@@ -1,5 +1,6 @@
 #include <ns3/defiance-module.h>
 #include <ns3/internet-stack-helper.h>
+#include <ns3/ipv4-address-helper.h>
 #include <ns3/point-to-point-helper.h>
 #include <ns3/rl-application-helper.h>
 #include <ns3/test.h>

@@ -1,6 +1,6 @@
 #include "environment-creator.h"
 
-#include "pendulum-cart.h"
+#include "pendulum-cart/pendulum-cart.h"
 
 #include <ns3/internet-stack-helper.h>
 #include <ns3/ipv4-static-routing-helper.h>

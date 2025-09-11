@@ -1,12 +1,13 @@
+#include "environment-creator.h"
+#include "pendulum-cart/pendulum-cart.h"
+
 #include <ns3/action-application.h>
 #include <ns3/agent-application.h>
 #include <ns3/base-test.h>
 #include <ns3/defiance-module.h>
-#include <ns3/environment-creator.h>
 #include <ns3/mobility-module.h>
 #include <ns3/netanim-module.h>
 #include <ns3/observation-application.h>
-#include <ns3/pendulum-cart.h>
 #include <ns3/reward-application.h>
 
 #include <math.h>

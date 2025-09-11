@@ -20,6 +20,7 @@ build_lib_example(
         SOURCE_FILES agent-agent-communication/agent-agent-communication.cc
         LIBRARIES_TO_LINK
                 ${libdefiance}
+                ${libmobility}
 )
 
 build_lib_example(
@@ -27,6 +28,7 @@ build_lib_example(
         SOURCE_FILES agent-agent-communication/observation-sharing.cc
         LIBRARIES_TO_LINK
                 ${libdefiance}
+                ${libmobility}
 )
 
 build_lib_example(
@@ -41,6 +43,7 @@ build_lib_example(
         SOURCE_FILES application-communication-example/send-to-agent.cc
         LIBRARIES_TO_LINK
                 ${libdefiance}
+                ${liblte}
                 ${libapplications}
 )
 
@@ -49,6 +52,7 @@ build_lib_example(
         SOURCE_FILES channel-interface-example/channel-interface-example.cc
         LIBRARIES_TO_LINK
                 ${libdefiance}
+                ${liblte}
 )
 
 build_lib_example(
@@ -56,9 +60,21 @@ build_lib_example(
         SOURCE_FILES
                 lte-learning/pc-simulation.cc
                 lte-learning/pc-environment.cc
-        HEADER_FILES lte-learning/pc-environment.h
+                lte-learning/topology-creator.cc
+                lte-learning/sumo-environment.cc
+                lte-learning/static-environment.cc
+                lte-learning/device-manager.cc
+                lte-learning/base-environment.cc
+        HEADER_FILES
+                lte-learning/pc-environment.h
+                lte-learning/topology-creator.h
+                lte-learning/sumo-environment.h
+                lte-learning/static-environment.h
+                lte-learning/device-manager.h
+                lte-learning/base-environment.h
         LIBRARIES_TO_LINK
                 ${libdefiance}
+                ${liblte}
 )
 
 build_lib_example(
@@ -66,18 +82,30 @@ build_lib_example(
         SOURCE_FILES lte-learning/test.cc
         LIBRARIES_TO_LINK
                 ${libdefiance}
+                ${liblte}
 )
 
 build_lib_example(
         NAME defiance-pendulum
-        SOURCE_FILES pendulum-cart/test-cart.cc
+        SOURCE_FILES
+                scenario/pendulum-cart/test-cart.cc
+                scenario/pendulum-cart/pendulum-cart.cc
+        HEADER_FILES
+                scenario/pendulum-cart/pendulum-cart.h
         LIBRARIES_TO_LINK
                 ${libdefiance}
+                ${liblte}
 )
 
 build_lib_example(
         NAME defiance-balance1
-        SOURCE_FILES scenario/balance1-scenario.cc
+        SOURCE_FILES
+                scenario/balance1-scenario.cc
+                scenario/pendulum-cart/pendulum-cart.cc
+                scenario/environment-creator.cc
+        HEADER_FILES
+                scenario/pendulum-cart/pendulum-cart.h
+                scenario/environment-creator.h
         LIBRARIES_TO_LINK
                 ${libdefiance}
                 ${libnetanim}
@@ -85,7 +113,13 @@ build_lib_example(
 
 build_lib_example(
         NAME defiance-balance2
-        SOURCE_FILES scenario/balance2-scenario.cc
+        SOURCE_FILES
+                scenario/balance2-scenario.cc
+                scenario/pendulum-cart/pendulum-cart.cc
+                scenario/environment-creator.cc
+        HEADER_FILES
+                scenario/pendulum-cart/pendulum-cart.h
+                scenario/environment-creator.h
         LIBRARIES_TO_LINK
                 ${libdefiance}
                 ${libnetanim}
@@ -101,9 +135,16 @@ build_lib_example(
 
 build_lib_example(
         NAME defiance-environment-creator-example
-        SOURCE_FILES scenario/environment-creator-example.cc
+        SOURCE_FILES
+                scenario/environment-creator-example.cc
+                scenario/environment-creator.cc
+                scenario/pendulum-cart/pendulum-cart.cc
+        HEADER_FILES
+                scenario/environment-creator.h
+                scenario/pendulum-cart/pendulum-cart.h
         LIBRARIES_TO_LINK
                 ${libdefiance}
+                ${liblte}
 )
 
 build_lib_example(
@@ -121,6 +162,7 @@ build_lib_example(
                 handover/handover-reward-application.h
         LIBRARIES_TO_LINK
                 ${libapplications}
+                ${liblte}
                 ${libdefiance}
 )
 

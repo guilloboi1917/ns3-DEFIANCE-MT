@@ -3,8 +3,6 @@
 
 #include "static-environment.h"
 
-#include <ns3/topology-creator.h>
-
 namespace ns3
 {
 

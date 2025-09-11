@@ -1,11 +1,12 @@
+#include "pendulum-cart.h"
+
 #include <ns3/log.h>
 #include <ns3/lte-helper.h>
-#include <ns3/pendulum-cart.h>
 
 #include <fstream>
 #include <sstream>
 #include <string>
-#include <vector>
+
 using namespace ns3;
 
 /*
