@@ -87,7 +87,7 @@ Ptr<OpenGymSpace>
 ApbEnv::GetActionSpace()
 {
     std::vector<uint32_t> shape = {1};
-    std::string dtype = TypeNameGet<int>();
+    std::string dtype = TypeNameGet<float>();
     auto box = CreateObject<OpenGymBoxSpace>(0, 20, shape, dtype);
     return box;
 }
@@ -96,7 +96,7 @@ Ptr<OpenGymSpace>
 ApbEnv::GetObservationSpace()
 {
     std::vector<uint32_t> shape = {2};
-    std::string dtype = TypeNameGet<int>();
+    std::string dtype = TypeNameGet<float>();
     auto box = CreateObject<OpenGymBoxSpace>(0, 10, shape, dtype);
     return box;
 }
@@ -111,7 +111,7 @@ Ptr<OpenGymDataContainer>
 ApbEnv::GetObservation()
 {
     std::vector<uint32_t> shape = {2};
-    auto box = CreateObject<OpenGymBoxContainer<int>>(shape);
+    auto box = CreateObject<OpenGymBoxContainer<float>>(shape);
 
     box->AddValue(m_a);
     box->AddValue(m_b);
@@ -135,7 +135,7 @@ ApbEnv::GetExtraInfo()
 bool
 ApbEnv::ExecuteActions(Ptr<OpenGymDataContainer> action)
 {
-    auto box = DynamicCast<OpenGymBoxContainer<int>>(action);
+    auto box = DynamicCast<OpenGymBoxContainer<float>>(action);
     m_sum = box->GetValue(0);
     return true;
 }

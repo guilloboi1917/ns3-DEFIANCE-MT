@@ -1,7 +1,6 @@
 """!Agent leveraging ray to train an agent for a certain ns3 environment."""
 
 import logging
-from collections import defaultdict
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -9,81 +8,18 @@ from typing import Any
 import numpy as np
 import ray
 from ns3ai_gym_env.envs.ns3_multi_agent_environment import Ns3MultiAgentEnv
-from ray.air import CheckpointConfig, RunConfig
 from ray.air.integrations.wandb import WandbLoggerCallback
-from ray.rllib import Policy, RolloutWorker, SampleBatch
-from ray.rllib.algorithms import AlgorithmConfig, DQNConfig, PPOConfig
-from ray.rllib.algorithms.callbacks import DefaultCallbacks
-from ray.rllib.env import BaseEnv
-from ray.rllib.evaluation import Episode
-from ray.rllib.policy.policy import PolicySpec
+from ray.rllib.algorithms import AlgorithmConfig
+from ray.rllib.connectors.env_to_module import FlattenObservations
+from ray.rllib.policy.policy import Policy
 from ray.tune import Tuner, register_env
-from typing_extensions import override
+from ray.tune.impl.config import CheckpointConfig, RunConfig
+from ray.tune.registry import get_trainable_cls
 
 from defiance import NS3_HOME
 from defiance.utils import first
 
 logger = logging.getLogger(__name__)
-
-
-class DefianceCallbacks(DefaultCallbacks):
-    """!Ray callbacks for multi-agent ns3-ai integration into tensorflow"""
-
-    @override
-    def on_episode_start(
-        self,
-        *,
-        episode: Episode,
-        **kwargs: Any,
-    ) -> None:
-        logger.info("episode %s started", episode.episode_id)
-        episode.user_data = defaultdict(list, episode.user_data)
-        episode.hist_data = defaultdict(list, episode.hist_data)
-
-    @override
-    def on_episode_step(self, *, base_env: BaseEnv, episode: Episode, **kwargs: Any) -> None:
-        logger.info("ON EPISODE STEP CALLBACK WAS EXECUTED")
-        for agent in base_env.get_agent_ids():
-            info = episode.last_info_for(agent) or {}
-            for k, raw in info.items():
-                try:
-                    v = float(raw)
-                except ValueError:
-                    logger.exception("Could not log %s: %s", k, raw)
-                    continue
-                episode.user_data[k].append(v)
-                episode.hist_data[k].append(v)
-
-    @override
-    def on_episode_end(
-        self,
-        *,
-        episode: Episode,
-        **kwargs: Any,
-    ) -> None:
-        logger.info("ON EPISODE END CALLBACK WAS EXECUTED")
-        for k, v in episode.user_data.items():
-            episode.custom_metrics[f"{k}_mean"] = np.mean(v)
-
-    @override
-    def on_sample_end(self, *, samples: SampleBatch, **kwargs: Any) -> None:
-        logger.info("returned sample batch of size %s", samples.count)
-
-    @override
-    def on_postprocess_trajectory(
-        self,
-        worker: RolloutWorker,
-        episode: Episode,
-        agent_id: str,
-        policy_id: str,
-        policies: dict[str, Policy],
-        postprocessed_batch: SampleBatch,
-        original_batches: dict[str, SampleBatch],
-        **kwargs: Any,
-    ) -> None:
-        if "num_batches" not in episode.custom_metrics:
-            episode.custom_metrics["num_batches"] = 0
-        episode.custom_metrics["num_batches"] += 1
 
 
 def start_inference(env_name: str, load_checkpoint_path: str | Path, **ns3_settings: str) -> None:
@@ -96,6 +32,10 @@ def start_inference(env_name: str, load_checkpoint_path: str | Path, **ns3_setti
         policies = Policy.from_checkpoint(str(load_checkpoint_path / "best_checkpoint"))
     else:
         policies = Policy.from_checkpoint(str(load_checkpoint_path))
+
+    if not isinstance(policies, dict):
+        msg = "Checkpoint is not multi-agent"
+        raise TypeError(msg)
 
     ns3_settings["visualize"] = ""
     env = Ns3MultiAgentEnv(targetName=env_name, ns3Path=NS3_HOME, ns3Settings=ns3_settings, trial_name="bootup")
@@ -166,48 +106,36 @@ def create_example_training_config(
 
     if "policy" in training_params and training_params["policy"] == "shared":
         logger.info("started training with shared Policy")
-        policies = {
-            "shared_policy": PolicySpec(
-                observation_space=env.observation_space["agent_0"], action_space=env.action_space["agent_0"]
-            )
-        }
+        policies = {"shared_policy"}
 
         def policy_mapping_fn(agent_id: str, *_args: Any, **_kwargs: Any) -> str:  # noqa: ARG001
             return "shared_policy"
     else:
         logger.info("started training with individual Policy")
-        policies = {
-            agent_id: PolicySpec(
-                observation_space=env.observation_space[agent_id], action_space=env.action_space[agent_id]
-            )
-            for agent_id in env.observation_space
-        }
+        policies = set(env.observation_spaces.keys())
 
         def policy_mapping_fn(agent_id: str, *_args: Any, **_kwargs: Any) -> str:
             return agent_id
 
-    match trainable:
-        case "PPO":
-            config: AlgorithmConfig = PPOConfig()
-        case "DQN":
-            config = DQNConfig()
-        case _:
-            msg = f"trainable {trainable} not supported, use PPO or DQN instead!"
-            raise ValueError(msg)
+    def _env_to_module_pipeline(*_args: Any, **_kwargs: Any) -> FlattenObservations:
+        return FlattenObservations(multi_agent=True)
+
     return (
-        config.training()
-        .callbacks(DefianceCallbacks)
-        .resources(num_gpus=0)
-        .framework("tf")
-        .rollouts(
-            num_envs_per_worker=1,
-            num_rollout_workers=ns3_settings["parallel"],
+        get_trainable_cls(trainable)
+        .get_default_config()
+        .environment(env="defiance", env_config={"num_agents": len(env.observation_spaces.keys())})
+        .env_runners(
+            num_envs_per_env_runner=1,
+            num_env_runners=ns3_settings["parallel"],
             create_env_on_local_worker=False,
             rollout_fragment_length=rollout_fragment_length or "auto",
+            env_to_module_connector=_env_to_module_pipeline,
+        )
+        .training(
+            gamma=0.99,
+            lr=0.0003,
         )
         .multi_agent(policies=policies, policy_mapping_fn=policy_mapping_fn)
-        .reporting(metrics_num_episodes_for_smoothing=1)
-        .environment(env="defiance", env_config={"num_agents": len(env.observation_space.keys()), **ns3_settings})
     )
 
 

@@ -1,9 +1,9 @@
 #ifndef BASE_ENVIRONMENT_H
 #define BASE_ENVIRONMENT_H
 
+#include "device-manager.h"
+
 #include <ns3/container.h>
-#include <ns3/defiance-helper.h>
-#include <ns3/device-manager.h>
 #include <ns3/epc-helper.h>
 #include <ns3/lte-helper.h>
 #include <ns3/ns3-ai-gym-env.h>

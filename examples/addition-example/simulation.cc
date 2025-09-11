@@ -70,10 +70,13 @@ main(int argc, char* argv[])
     commHelper.AddCommunication(adjacency);
     commHelper.Configure();
 
-    Simulator::Stop(Seconds(400));
+    for (auto it = agentApps.Begin(); it != agentApps.End(); it++)
+    {
+        Simulator::Schedule(Seconds(400),
+                            MakeCallback(&AgentApplication::RequestTruncation,
+                                         PeekPointer((*it)->GetObject<AgentApplication>())));
+    }
     Simulator::Run();
-
-    OpenGymMultiAgentInterface::Get()->NotifySimulationEnd();
 
     return 0;
 }

@@ -1,5 +1,7 @@
 #include "sumo-environment.h"
 
+#include "topology-creator.h"
+
 #include <ns3/constant-position-mobility-model.h>
 
 namespace ns3

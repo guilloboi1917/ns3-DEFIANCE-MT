@@ -1,16 +1,16 @@
+#include "environment-creator.h"
+#include "pendulum-cart/pendulum-cart.h"
+
 #include <ns3/action-application.h>
 #include <ns3/agent-application.h>
 #include <ns3/base-test.h>
 #include <ns3/defiance-module.h>
-#include <ns3/environment-creator.h>
 #include <ns3/mobility-module.h>
 #include <ns3/netanim-module.h>
 #include <ns3/observation-application.h>
-#include <ns3/pendulum-cart.h>
 #include <ns3/reward-application.h>
 #include <ns3/rl-application-helper.h>
 
-#include <algorithm>
 #include <cstdint>
 #include <math.h>
 #include <string>
@@ -419,10 +419,13 @@ main(int argc, char* argv[])
         DynamicCast<PendulumCart>(cartNode)->m_reportCarStatsTrace.ConnectWithoutContext(
             MakeBoundCallback(&SaveStats, stats_file_ptr));
     }
-
-    Simulator::Stop(Seconds(10));
+    for (auto it = agentApps.Begin(); it != agentApps.End(); it++)
+    {
+        Simulator::Schedule(Seconds(10),
+                            MakeCallback(&AgentApplication::RequestTruncation,
+                                         PeekPointer((*it)->GetObject<AgentApplication>())));
+    }
     Simulator::Run();
-    OpenGymMultiAgentInterface::Get()->NotifySimulationEnd();
 
     return 0;
 }

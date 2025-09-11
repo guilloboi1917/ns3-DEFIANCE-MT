@@ -267,7 +267,7 @@ AgentApplication::InferAction()
         GetId().ToString(),
         m_observation,
         m_reward,
-        false,
+        m_truncationRequested,
         GetExtraInfo(),
         GetActionDelay(),
         MakeCallback(&AgentApplication::InitiateAction, this));
@@ -280,10 +280,16 @@ AgentApplication::InferAction(uint remoteAppId)
         GetId().ToString(),
         m_observation,
         m_reward,
-        false,
+        m_truncationRequested,
         GetExtraInfo(),
         GetActionDelay(),
         MakeCallback(&AgentApplication::InitiateActionForApp, this, remoteAppId));
+}
+
+void
+AgentApplication::RequestTruncation()
+{
+    m_truncationRequested = true;
 }
 
 } // namespace ns3

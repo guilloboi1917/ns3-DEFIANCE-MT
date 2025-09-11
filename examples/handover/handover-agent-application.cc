@@ -112,7 +112,7 @@ Ptr<OpenGymSpace>
 HandoverAgentApplication::GetActionSpace()
 {
     std::vector<uint32_t> shape = {1};
-    std::string dtype = TypeNameGet<int32_t>();
+    std::string dtype = TypeNameGet<float>();
     Ptr<OpenGymBoxSpace> box = CreateObject<OpenGymBoxSpace>(1, m_numBs, shape, dtype);
     return box;
 }
