@@ -166,6 +166,13 @@ class AgentApplication : public RlApplication
      */
     void SendAction(Ptr<OpenGymDictContainer> action);
 
+    /**
+     * \brief Requests this agent to be truncated.
+     * In the next interaction through ns3-ai, isGameOver will be set.
+     * Scheduling this message should be preferred to using \c Simulator::Stop
+     */
+    void RequestTruncation();
+
   protected:
     uint m_maxObservationHistoryLength; //!< maximum length of the history of each observation deque
                                         //!< to store
@@ -274,6 +281,9 @@ class AgentApplication : public RlApplication
     {
         return Seconds(0);
     }
+
+    bool m_truncationRequested =
+        false; /// indicate if game over should be indicated in the next ns3-ai interaction
 };
 
 } // namespace ns3

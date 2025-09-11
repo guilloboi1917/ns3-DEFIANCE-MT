@@ -419,10 +419,13 @@ main(int argc, char* argv[])
         DynamicCast<PendulumCart>(cartNode)->m_reportCarStatsTrace.ConnectWithoutContext(
             MakeBoundCallback(&SaveStats, stats_file_ptr));
     }
-
-    Simulator::Stop(Seconds(10));
+    for (auto it = agentApps.Begin(); it != agentApps.End(); it++)
+    {
+        Simulator::Schedule(Seconds(10),
+                            MakeCallback(&AgentApplication::RequestTruncation,
+                                         PeekPointer((*it)->GetObject<AgentApplication>())));
+    }
     Simulator::Run();
-    OpenGymMultiAgentInterface::Get()->NotifySimulationEnd();
 
     return 0;
 }

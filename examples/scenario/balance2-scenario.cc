@@ -486,11 +486,14 @@ main(int argc, char* argv[])
                     MakeBoundCallback(&SaveStats, stats_file_ptr));
         }
     }
+    for (auto it = agentApps.Begin(); it != agentApps.End(); it++)
+    {
+        Simulator::Schedule(Seconds(5 + offset),
+                            MakeCallback(&AgentApplication::RequestTruncation,
+                                         PeekPointer((*it)->GetObject<AgentApplication>())));
+    }
 
-    Simulator::Stop(Seconds(5 + offset));
     Simulator::Run();
-
-    OpenGymMultiAgentInterface::Get()->NotifySimulationEnd();
 
     return 0;
 }
