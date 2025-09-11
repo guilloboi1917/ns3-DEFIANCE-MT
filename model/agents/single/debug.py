@@ -7,6 +7,8 @@ import gymnasium as gym
 import ns3ai_gym_env  # noqa: F401  # import to register env
 from gymnasium.wrappers import TimeLimit
 
+from defiance import NS3_HOME
+
 logger = logging.getLogger(__name__)
 
 
@@ -18,7 +20,7 @@ def make_debug_env(env_name: str, max_episode_steps: int, ns3_settings: dict[str
 def make_env(env_name: str, max_episode_steps: int, ns3_settings: dict[str, Any], **env_args: Any) -> gym.Env:
     """Make a configured ns3-ai gym env."""
     return TimeLimit(
-        gym.make("ns3ai_gym_env/Ns3-v0", targetName=env_name, ns3Path=".", ns3Settings=ns3_settings, **env_args),
+        gym.make("ns3ai_gym_env/Ns3-v0", targetName=env_name, ns3Path=NS3_HOME, ns3Settings=ns3_settings, **env_args),
         max_episode_steps=max_episode_steps,
     )
 
