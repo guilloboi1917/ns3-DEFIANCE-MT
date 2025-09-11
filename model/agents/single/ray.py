@@ -4,35 +4,18 @@ import logging
 from typing import Any
 
 import gymnasium as gym
-import ns3ai_gym_env  # noqa: F401  # import to register env
 import ray
 from gymnasium.wrappers import TimeLimit
-from ray.air import CheckpointConfig, RunConfig
+from ns3ai_gym_env.envs import Ns3Env
 from ray.air.integrations.wandb import WandbLoggerCallback
-from ray.rllib.algorithms import AlgorithmConfig, DQNConfig, PPOConfig
-from ray.rllib.evaluation import Episode
+from ray.rllib.algorithms import AlgorithmConfig
 from ray.tune import Tuner, register_env
-from typing_extensions import override
+from ray.tune.impl.config import CheckpointConfig, RunConfig
+from ray.tune.registry import get_trainable_cls
 
-from defiance.model.agents.ray import DefianceCallbacks
+from defiance import NS3_HOME
 
 logger = logging.getLogger(__name__)
-
-
-class SingleDefianceCallbacks(DefianceCallbacks):
-    """!Ray callbacks for ns3-ai integration into tensorflow"""
-
-    @override
-    def on_episode_step(self, *, episode: Episode, **kwargs: Any) -> None:
-        info = episode.last_info_for() or {}
-        for k, raw in info.items():
-            try:
-                v = float(raw)
-            except ValueError:
-                logger.exception("Could not log %s: %s", k, raw)
-                continue
-            episode.user_data[k].append(v)
-            episode.hist_data[k].append(v)
 
 
 def create_example_training_config(
@@ -44,30 +27,29 @@ def create_example_training_config(
     **ns3_settings: str,
 ) -> AlgorithmConfig:
     """!Create an example algorithm config for use with single agent training."""
-    register_env(
-        "defiance",
-        lambda _: TimeLimit(
-            gym.make("ns3ai_gym_env/Ns3-v0", targetName=env_name, ns3Path=".", ns3Settings=ns3_settings),
-            max_episode_steps=max_episode_steps,
-        ),
-    )
 
-    match trainable:
-        case "PPO":
-            config = PPOConfig().training(**{"lr": 5e-5, "clip_param": 0.3, "train_batch_size": 128} | training_params)
-        case "DQN":
-            config = DQNConfig().training()
-        case _:
-            msg = f"trainable {trainable} not supported, use PPO or DQN instead!"
-            raise ValueError(msg)
-    return (
-        config.resources(num_gpus=0)
-        .rollouts(
-            num_rollout_workers=1, num_envs_per_worker=1, rollout_fragment_length=rollout_fragment_length or "auto"
+    def environment_creator(_config: dict[str, Any]) -> Ns3Env:
+        import ns3ai_gym_env  # noqa: F401  # import again to register env
+
+        return TimeLimit(
+            gym.make("ns3ai_gym_env/Ns3-v0", targetName=env_name, ns3Path=NS3_HOME, ns3Settings=ns3_settings),
+            max_episode_steps=max_episode_steps,
         )
-        .framework("tf")
-        .environment(env="defiance", env_config=ns3_settings)
-        .callbacks(SingleDefianceCallbacks)
+
+    register_env("defiance", environment_creator)
+
+    config: AlgorithmConfig = get_trainable_cls(trainable).get_default_config()
+
+    return (
+        config.environment(env="defiance")
+        .training(**training_params)
+        .resources(num_gpus=0)
+        .env_runners(
+            num_env_runners=1,
+            num_envs_per_env_runner=1,
+            create_env_on_local_worker=False,
+            rollout_fragment_length=rollout_fragment_length or "auto",
+        )
     )
 
 

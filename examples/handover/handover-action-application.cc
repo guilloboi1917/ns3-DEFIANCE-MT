@@ -59,8 +59,7 @@ HandoverActionApplication::ExecuteAction(uint32_t remoteAppId, Ptr<OpenGymDictCo
 
     // 1: Is UE ready for a handover?
     auto currentCellId = g_ueLteDevs.Get(0)->GetObject<LteUeNetDevice>()->GetRrc()->GetCellId();
-    auto newCellId =
-        DynamicCast<OpenGymBoxContainer<int32_t>>(action->Get("newCellId"))->GetValue(0);
+    auto newCellId = DynamicCast<OpenGymBoxContainer<float>>(action->Get("newCellId"))->GetValue(0);
     NS_LOG_DEBUG("currentCellId: " << currentCellId << "\tnewCellId: " << newCellId);
     uint32_t i = 0;
     for (; i < g_enbLteDevs.GetN(); i++)

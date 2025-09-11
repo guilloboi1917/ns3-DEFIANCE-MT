@@ -37,7 +37,7 @@ def start_random_agent(env: Ns3MultiAgentEnv, iterations: int) -> None:
         i = 0
         while not terminated and not truncated:
             i += 1
-            action = env.action_space[agent].sample()
+            action = env.action_spaces[agent].sample()
             logger.info("taking action %s", action)
             states = env.step({agent: action})
             logger.info("got states %s", states)
