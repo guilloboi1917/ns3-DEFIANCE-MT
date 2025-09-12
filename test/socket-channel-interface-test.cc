@@ -1,10 +1,10 @@
-#include <ns3/callback.h>
-#include <ns3/core-module.h>
-#include <ns3/defiance-module.h>
-#include <ns3/internet-module.h>
-#include <ns3/log.h>
-#include <ns3/point-to-point-module.h>
-#include <ns3/test.h>
+#include "ns3/callback.h"
+#include "ns3/core-module.h"
+#include "ns3/defiance-module.h"
+#include "ns3/internet-module.h"
+#include "ns3/log.h"
+#include "ns3/point-to-point-module.h"
+#include "ns3/test.h"
 
 #include <vector>
 
@@ -12,7 +12,7 @@ namespace ns3
 {
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  *
  * Test to check if SocketChannelInterface can be used for communication
  */
@@ -263,9 +263,9 @@ SocketChannelInterfaceTestCase::DoRun()
 }
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  *
- * \brief TestSuite for SocketChannelInterface
+ * @brief TestSuite for SocketChannelInterface
  */
 class SocketChannelInterfaceTestSuite : public TestSuite
 {

@@ -2,7 +2,7 @@
 
 #include "topology-creator.h"
 
-#include <ns3/constant-position-mobility-model.h>
+#include "ns3/constant-position-mobility-model.h"
 
 namespace ns3
 {

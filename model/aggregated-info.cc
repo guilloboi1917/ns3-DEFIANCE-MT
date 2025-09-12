@@ -1,6 +1,6 @@
 #include "aggregated-info.h"
 
-#include <ns3/log.h>
+#include "ns3/log.h"
 
 #include <limits>
 
@@ -13,7 +13,7 @@ AggregatedInfo::AggregatedInfo()
       m_max(std::numeric_limits<float>::min()),
       m_avg(0),
       m_sum(0),
-      m_counter(0){};
+      m_counter(0) {};
 
 float
 AggregatedInfo::GetMin() const

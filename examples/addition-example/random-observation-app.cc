@@ -1,6 +1,6 @@
 #include "random-observation-app.h"
 
-#include <ns3/base-test.h>
+#include "ns3/base-test.h"
 
 namespace ns3
 {

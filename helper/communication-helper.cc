@@ -1,6 +1,6 @@
 #include "communication-helper.h"
 
-#include <ns3/simple-channel-interface.h>
+#include "ns3/simple-channel-interface.h"
 
 namespace ns3
 {

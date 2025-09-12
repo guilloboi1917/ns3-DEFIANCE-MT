@@ -1,8 +1,8 @@
 #ifndef NS3_RANDOM_OBSERVATION_APP_H
 #define NS3_RANDOM_OBSERVATION_APP_H
 
-#include <ns3/observation-application.h>
-#include <ns3/random-variable-stream.h>
+#include "ns3/observation-application.h"
+#include "ns3/random-variable-stream.h"
 
 namespace ns3
 {
@@ -18,7 +18,7 @@ class RandomObservationApp : public ObservationApplication
      * Assigns stream number to UniformRandomVariable used to
      * generate observations.
      *
-     * \param stream the stream number to assign
+     * @param stream the stream number to assign
      */
     int64_t AssignStreams(int64_t stream) override;
 

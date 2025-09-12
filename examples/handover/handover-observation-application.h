@@ -1,12 +1,12 @@
-#include <ns3/lte-rrc-sap.h>
-#include <ns3/lte-ue-net-device.h>
-#include <ns3/observation-application.h>
+#include "ns3/lte-rrc-sap.h"
+#include "ns3/lte-ue-net-device.h"
+#include "ns3/observation-application.h"
 
 using namespace ns3;
 
 /**
- * \ingroup defiance
- * \brief Child class of ObservationApp that observes measurement reports of UEs.
+ * @ingroup defiance
+ * @brief Child class of ObservationApp that observes measurement reports of UEs.
  */
 class HandoverObservationApplication : public ObservationApplication
 {

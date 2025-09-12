@@ -1,7 +1,7 @@
 #ifndef NS3_NO_OP_ACTION_APP_H
 #define NS3_NO_OP_ACTION_APP_H
 
-#include <ns3/action-application.h>
+#include "ns3/action-application.h"
 
 namespace ns3
 {

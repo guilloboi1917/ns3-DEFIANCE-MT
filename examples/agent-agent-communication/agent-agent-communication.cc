@@ -1,6 +1,6 @@
+#include "ns3/ai-module.h"
+#include "ns3/core-module.h"
 #include "ns3/defiance-module.h"
-#include <ns3/ai-module.h>
-#include <ns3/core-module.h>
 
 #include <iostream>
 
@@ -14,7 +14,7 @@ class AgentAgentCommunicationTestAgent : public AgentApplication
     AgentAgentCommunicationTestAgent()
         : AgentApplication(),
           // register custom data structure for agent messages here
-          m_agentDataStruct(10){};
+          m_agentDataStruct(10) {};
 
     ~AgentAgentCommunicationTestAgent() override = default;
 

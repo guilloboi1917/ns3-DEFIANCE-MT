@@ -1,12 +1,12 @@
-#include <ns3/defiance-module.h>
-#include <ns3/internet-stack-helper.h>
-#include <ns3/ipv4-address-helper.h>
-#include <ns3/point-to-point-helper.h>
-#include <ns3/rl-application-helper.h>
-#include <ns3/test.h>
+#include "ns3/defiance-module.h"
+#include "ns3/internet-stack-helper.h"
+#include "ns3/ipv4-address-helper.h"
+#include "ns3/point-to-point-helper.h"
+#include "ns3/rl-application-helper.h"
+#include "ns3/test.h"
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  *
  * Test to check if communication relationships between all app types can be established via the
  * CommunicationHelper
@@ -162,7 +162,7 @@ CommunicationTestCase::DoRun()
 }
 
 /**
- * \ingroup DEFIANCE-tests
+ * @ingroup DEFIANCE-tests
  * Test to check if communication connections can be deleted and added after setup
  */
 
@@ -310,9 +310,9 @@ DynamicInterfacesTestCase::DoRun()
 }
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  *
- * \brief TestSuite for Communication Helper
+ * @brief TestSuite for Communication Helper
  */
 class CommunicationTestSuite : public TestSuite
 {

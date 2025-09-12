@@ -2,7 +2,7 @@
 
 #include "channel-interface.h"
 
-#include <ns3/node.h>
+#include "ns3/node.h"
 
 using namespace ns3;
 

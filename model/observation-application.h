@@ -6,9 +6,9 @@
 namespace ns3
 {
 /**
- * \ingroup defiance
- * \class ObservationApplication
- * \brief This application is installed on a node where observations occur.
+ * @ingroup defiance
+ * @class ObservationApplication
+ * @brief This application is installed on a node where observations occur.
  *
  * Instances of this class do not send any data if they are not registered at a callback. To send
  * observations this class should be inherited by a class which is registered at a callback and
@@ -28,8 +28,8 @@ class ObservationApplication : public DataCollectorApplication
     ~ObservationApplication() override;
 
     /**
-     * \brief Get the type ID.
-     * \return the object TypeId.
+     * @brief Get the type ID.
+     * @return the object TypeId.
      */
     static TypeId GetTypeId();
 };

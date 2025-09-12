@@ -1,11 +1,11 @@
 #ifndef RL_APPLICATIONS_HELPER_H
 #define RL_APPLICATIONS_HELPER_H
 
-#include <ns3/address.h>
-#include <ns3/attribute.h>
-#include <ns3/node-container.h>
-#include <ns3/object-factory.h>
-#include <ns3/rl-application-container.h>
+#include "ns3/address.h"
+#include "ns3/attribute.h"
+#include "ns3/node-container.h"
+#include "ns3/object-factory.h"
+#include "ns3/rl-application-container.h"
 
 #include <string>
 
@@ -13,9 +13,9 @@ namespace ns3
 {
 
 /**
- * \ingroup defiance
- * \class RlApplicationHelper
- * \brief A helper to make it easier to instantiate an RlApplication on a set of nodes.
+ * @ingroup defiance
+ * @class RlApplicationHelper
+ * @brief A helper to make it easier to instantiate an RlApplication on a set of nodes.
  */
 class RlApplicationHelper
 {

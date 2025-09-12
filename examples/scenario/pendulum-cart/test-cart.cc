@@ -1,7 +1,7 @@
 #include "pendulum-cart.h"
 
-#include <ns3/log.h>
-#include <ns3/lte-helper.h>
+#include "ns3/log.h"
+#include "ns3/lte-helper.h"
 
 #include <fstream>
 #include <sstream>
@@ -65,7 +65,7 @@ main(int argc, char* argv[])
 {
     // default path were the log_file will be stored
     std::string outFilePath =
-        "/code/source/ns-3.40/contrib/defiance/examples/pendulum-cart/log.txt";
+        std::string(std::getenv("NS3_HOME")) + "/contrib/defiance/examples/pendulum-cart/log.txt";
 
     // the following also maps the command line arguments to attributes of the cart
     CommandLine cmd(__FILE__);

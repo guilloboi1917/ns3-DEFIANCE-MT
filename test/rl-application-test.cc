@@ -1,12 +1,12 @@
-#include <ns3/callback.h>
-#include <ns3/defiance-module.h>
-#include <ns3/rl-application.h>
-#include <ns3/test.h>
+#include "ns3/callback.h"
+#include "ns3/defiance-module.h"
+#include "ns3/rl-application.h"
+#include "ns3/test.h"
 
 using namespace ns3;
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  * Child class of RlApplication that unifies functionality to create
  * the appropriate DictContainer and functionality to allow calling
  * the callback object
@@ -17,8 +17,8 @@ class CustomRlApp : public RlApplication
     CustomRlApp();
     virtual ~CustomRlApp();
     /**
-     * \brief Get the type ID.
-     * \return the object TypeId.
+     * @brief Get the type ID.
+     * @return the object TypeId.
      */
     static TypeId GetTypeId();
 
@@ -50,7 +50,7 @@ CustomRlApp::SendData(Ptr<OpenGymDictContainer> data,
 }
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  * Test to check if data can be sent to a custom number of interfaces
  */
 
@@ -101,7 +101,7 @@ RlAppSendTestCase::Simulate()
 }
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  * Test to check if observation is impossible to send after stopping the application
  */
 
@@ -158,9 +158,9 @@ RlAppStopTestCase::Simulate()
 }
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  *
- * \brief TestSuite for RlApp
+ * @brief TestSuite for RlApp
  */
 class RlAppTestSuite : public TestSuite
 {

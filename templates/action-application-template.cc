@@ -1,11 +1,11 @@
-#include <ns3/action-application.h>
-#include <ns3/defiance-module.h>
+#include "ns3/action-application.h"
+#include "ns3/defiance-module.h"
 
 class TemplateActionApplication : public ActionApplication
 {
   public:
-    TemplateActionApplication(){};
-    ~TemplateActionApplication(){};
+    TemplateActionApplication() {};
+    ~TemplateActionApplication() {};
 
     static TypeId GetTypeId()
     {

@@ -1,5 +1,5 @@
-#include <ns3/agent-application.h>
-#include <ns3/defiance-module.h>
+#include "ns3/agent-application.h"
+#include "ns3/defiance-module.h"
 
 using namespace ns3;
 
@@ -11,7 +11,7 @@ class TemplateAgentApplication : public AgentApplication
     TemplateAgentApplication()
         : AgentApplication(),
           // register custom data structure for agent messages here
-          m_agentDataStruct(10){};
+          m_agentDataStruct(10) {};
 
     ~TemplateAgentApplication() override = default;
 
