@@ -1,8 +1,8 @@
 #ifndef NS3_NODE_ID_REWARD_APP_H
 #define NS3_NODE_ID_REWARD_APP_H
 
-#include <ns3/observation-application.h>
-#include <ns3/random-variable-stream.h>
+#include "ns3/observation-application.h"
+#include "ns3/random-variable-stream.h"
 
 namespace ns3
 {

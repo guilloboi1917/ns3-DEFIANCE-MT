@@ -1,6 +1,6 @@
 #include "random-observation-app.h"
 
-#include <ns3/base-test.h>
+#include "ns3/base-test.h"
 
 namespace ns3
 {
@@ -40,10 +40,12 @@ RandomObservationApp::RegisterCallbacks()
     Simulator::Schedule(Seconds(1.0), &RandomObservationApp::Observe, this);
 }
 
-void
-RandomObservationApp::AssignStreams(int64_t streamNumber)
+int64_t
+RandomObservationApp::AssignStreams(int64_t stream)
 {
-    m_uv->SetStream(streamNumber);
+    NS_LOG_FUNCTION(this << stream);
+    m_uv->SetStream(stream);
+    return 1;
 }
 
 NS_OBJECT_ENSURE_REGISTERED(RandomObservationApp);

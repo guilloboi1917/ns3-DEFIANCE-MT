@@ -1,12 +1,12 @@
-#include <ns3/agent-application.h>
-#include <ns3/base-test.h>
-#include <ns3/lte-helper.h>
+#include "ns3/agent-application.h"
+#include "ns3/base-test.h"
+#include "ns3/lte-helper.h"
 
 using namespace ns3;
 
 /**
- * \ingroup defiance
- * \brief Child class of AgentApplication that receives all observations and distributes actions.
+ * @ingroup defiance
+ * @brief Child class of AgentApplication that receives all observations and distributes actions.
  */
 class HandoverAgentApplication : public AgentApplication
 {

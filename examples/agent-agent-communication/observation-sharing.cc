@@ -1,7 +1,7 @@
+#include "ns3/ai-module.h"
+#include "ns3/core-module.h"
 #include "ns3/defiance-module.h"
-#include <ns3/ai-module.h>
-#include <ns3/core-module.h>
-#include <ns3/mobility-module.h>
+#include "ns3/mobility-module.h"
 
 #include <cstdint>
 #include <iostream>
@@ -38,7 +38,7 @@ class TestObservationApplication : public ObservationApplication
 
   public:
     TestObservationApplication()
-        : ObservationApplication(){};
+        : ObservationApplication() {};
 
     ~TestObservationApplication() override = default;
 
@@ -70,7 +70,7 @@ class ObservationSharingTestAgent : public AgentApplication
     ObservationSharingTestAgent()
         // register custom data structure for agent messages here
         : AgentApplication(),
-          m_agentDataStruct(10){};
+          m_agentDataStruct(10) {};
 
     ~ObservationSharingTestAgent() override = default;
 
@@ -140,7 +140,7 @@ NS_OBJECT_ENSURE_REGISTERED(ObservationSharingTestAgent);
 // run this example with 'ns3 run defiance-observation-sharing'
 
 /**
- * \brief Main function for the observation sharing example.
+ * @brief Main function for the observation sharing example.
  * This function creates an observation application and two agents. The observation application
  * sends 10 observations to agent0 who forwards them to agent1. Therefore agent0 receives 10
  * observations and no agent messages, while agent1 receives 10 agent messages and no observations.

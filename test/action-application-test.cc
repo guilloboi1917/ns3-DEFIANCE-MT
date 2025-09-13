@@ -1,11 +1,11 @@
-#include <ns3/callback.h>
-#include <ns3/defiance-module.h>
-#include <ns3/test.h>
+#include "ns3/callback.h"
+#include "ns3/defiance-module.h"
+#include "ns3/test.h"
 
 using namespace ns3;
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  *
  */
 class ActionAppTestCase : public TestCase
@@ -76,9 +76,9 @@ ActionAppTestCase::DoRun()
 }
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  *
- * \brief TestSuite for ActionApp
+ * @brief TestSuite for ActionApp
  */
 class ActionAppTestSuite : public TestSuite
 {
@@ -87,9 +87,9 @@ class ActionAppTestSuite : public TestSuite
 };
 
 ActionAppTestSuite::ActionAppTestSuite()
-    : TestSuite("defiance-action-application", UNIT)
+    : TestSuite("defiance-action-application", Type::UNIT)
 {
-    AddTestCase(new ActionAppTestCase, TestCase::QUICK);
+    AddTestCase(new ActionAppTestCase, Duration::QUICK);
 }
 
 static ActionAppTestSuite sActionAppTestSuite; //!< Static variable for test initialization

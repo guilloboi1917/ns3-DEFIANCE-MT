@@ -1,12 +1,12 @@
-#include <ns3/defiance-module.h>
-#include <ns3/test.h>
+#include "ns3/defiance-module.h"
+#include "ns3/test.h"
 
 using namespace ns3;
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  *
- * \brief Test case for observation datastructure
+ * @brief Test case for observation datastructure
  */
 class HistoryContainerTest : public TestCase
 {
@@ -33,9 +33,9 @@ HistoryContainerTest::~HistoryContainerTest()
 }
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  *
- * \brief Test AggregatedInfo class by adding and updating vales and checking the aggregated results
+ * @brief Test AggregatedInfo class by adding and updating vales and checking the aggregated results
  */
 void
 HistoryContainerTest::TestAggregatedInfo()
@@ -58,9 +58,9 @@ HistoryContainerTest::ExtractFloatBox(Ptr<OpenGymDictContainer> dict, std::strin
 }
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  *
- * \brief Test pushing and extracting data from HistoryContainer
+ * @brief Test pushing and extracting data from HistoryContainer
  */
 void
 HistoryContainerTest::TestDataStruct()
@@ -138,9 +138,9 @@ HistoryContainerTest::TestDataStruct()
 }
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  *
- * \brief Test aggregation over multiple observations
+ * @brief Test aggregation over multiple observations
  */
 void
 HistoryContainerTest::TestDataStructAggregation()
@@ -219,9 +219,9 @@ HistoryContainerTest::DoRun()
 }
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  *
- * \brief TestSuite for ObsDatastructure
+ * @brief TestSuite for ObsDatastructure
  */
 class HistoryContainerTestSuite : public TestSuite
 {
@@ -230,9 +230,9 @@ class HistoryContainerTestSuite : public TestSuite
 };
 
 HistoryContainerTestSuite::HistoryContainerTestSuite()
-    : TestSuite("defiance-history-container", UNIT)
+    : TestSuite("defiance-history-container", Type::UNIT)
 {
-    AddTestCase(new HistoryContainerTest, TestCase::QUICK);
+    AddTestCase(new HistoryContainerTest, Duration::QUICK);
 }
 
 static HistoryContainerTestSuite

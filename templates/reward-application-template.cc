@@ -1,11 +1,11 @@
-#include <ns3/defiance-module.h>
-#include <ns3/reward-application.h>
+#include "ns3/defiance-module.h"
+#include "ns3/reward-application.h"
 
 class TemplateRewardApplication : public RewardApplication
 {
   public:
-    TemplateRewardApplication(){};
-    ~TemplateRewardApplication() override{};
+    TemplateRewardApplication() {};
+    ~TemplateRewardApplication() override {};
 
     static TypeId GetTypeId()
     {

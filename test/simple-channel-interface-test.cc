@@ -1,9 +1,9 @@
-#include <ns3/defiance-module.h>
-#include <ns3/internet-stack-helper.h>
-#include <ns3/ipv4-address-generator.h>
-#include <ns3/ipv4-address-helper.h>
-#include <ns3/point-to-point-helper.h>
-#include <ns3/test.h>
+#include "ns3/defiance-module.h"
+#include "ns3/internet-stack-helper.h"
+#include "ns3/ipv4-address-generator.h"
+#include "ns3/ipv4-address-helper.h"
+#include "ns3/point-to-point-helper.h"
+#include "ns3/test.h"
 
 #include <sstream>
 #include <string>
@@ -11,7 +11,7 @@
 using namespace ns3;
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  * Base test case class that unifies setup functionality for different tests.
  * This is not a full test case yet, actual tests need to inherit from it.
  */
@@ -72,7 +72,7 @@ SimpleChannelInterfaceBaseTestCase::DoRun()
 }
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  * Test to check that the connection procedure between SimpleChannelInterfaces works as expected.
  */
 class SimpleChannelInterfaceConnectTestCase : public SimpleChannelInterfaceBaseTestCase
@@ -251,7 +251,7 @@ SimpleChannelInterfaceConnectTestCase::Simulate()
 }
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  * Test to check that the connection procedure between SimpleChannelInterfaces works as expected.
  */
 class SimpleChannelInterfaceReceiveTestCase : public SimpleChannelInterfaceBaseTestCase
@@ -340,9 +340,9 @@ SimpleChannelInterfaceReceiveTestCase::Simulate()
 }
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  *
- * \brief TestSuite for SimpleChannelInterface
+ * @brief TestSuite for SimpleChannelInterface
  */
 class SimpleChannelInterfaceTestSuite : public TestSuite
 {
@@ -351,10 +351,10 @@ class SimpleChannelInterfaceTestSuite : public TestSuite
 };
 
 SimpleChannelInterfaceTestSuite::SimpleChannelInterfaceTestSuite()
-    : TestSuite("defiance-simple-channel-interface", UNIT)
+    : TestSuite("defiance-simple-channel-interface", Type::UNIT)
 {
-    AddTestCase(new SimpleChannelInterfaceConnectTestCase, TestCase::QUICK);
-    AddTestCase(new SimpleChannelInterfaceReceiveTestCase, TestCase::QUICK);
+    AddTestCase(new SimpleChannelInterfaceConnectTestCase, Duration::QUICK);
+    AddTestCase(new SimpleChannelInterfaceReceiveTestCase, Duration::QUICK);
 }
 
 static SimpleChannelInterfaceTestSuite

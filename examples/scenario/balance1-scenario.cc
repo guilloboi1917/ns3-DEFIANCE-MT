@@ -1,15 +1,15 @@
 #include "environment-creator.h"
 #include "pendulum-cart/pendulum-cart.h"
 
-#include <ns3/action-application.h>
-#include <ns3/agent-application.h>
-#include <ns3/base-test.h>
-#include <ns3/defiance-module.h>
-#include <ns3/mobility-module.h>
-#include <ns3/netanim-module.h>
-#include <ns3/observation-application.h>
-#include <ns3/reward-application.h>
-#include <ns3/rl-application-helper.h>
+#include "ns3/action-application.h"
+#include "ns3/agent-application.h"
+#include "ns3/base-test.h"
+#include "ns3/defiance-module.h"
+#include "ns3/mobility-module.h"
+#include "ns3/netanim-module.h"
+#include "ns3/observation-application.h"
+#include "ns3/reward-application.h"
+#include "ns3/rl-application-helper.h"
 
 #include <cstdint>
 #include <math.h>
@@ -40,8 +40,8 @@ SaveStats(Ptr<OutputStreamWrapper> stats_file,
 class PendulumObservationApp : public ObservationApplication
 {
   public:
-    PendulumObservationApp(){};
-    ~PendulumObservationApp() override{};
+    PendulumObservationApp() {};
+    ~PendulumObservationApp() override {};
     static TypeId GetTypeId();
     void Observe(uint32_t nodeId,
                  double cartMass,
@@ -101,8 +101,8 @@ PendulumObservationApp::RegisterCallbacks()
 class PendulumRewardApp : public RewardApplication
 {
   public:
-    PendulumRewardApp(){};
-    ~PendulumRewardApp() override{};
+    PendulumRewardApp() {};
+    ~PendulumRewardApp() override {};
     static TypeId GetTypeId();
     void Reward(uint32_t nodeId,
                 double cartMass,
@@ -168,7 +168,7 @@ class InferenceAgentApp : public AgentApplication
         m_observation = MakeBoxContainer<float>(4, 0, 0, 0, 0);
     };
 
-    ~InferenceAgentApp() override{};
+    ~InferenceAgentApp() override {};
 
     Time m_stepTime;
 
@@ -263,8 +263,8 @@ class InferenceAgentApp : public AgentApplication
 class PendulumActionApp : public ActionApplication
 {
   public:
-    PendulumActionApp(){};
-    ~PendulumActionApp() override{};
+    PendulumActionApp() {};
+    ~PendulumActionApp() override {};
 
     static TypeId GetTypeId()
     {
@@ -301,7 +301,6 @@ NS_OBJECT_ENSURE_REGISTERED(InferenceAgentApp);
 int
 main(int argc, char* argv[])
 {
-    NS_LOG_APPEND_TIME_PREFIX;
     // LogComponentEnable("SocketChannelInterface", ns3::LOG_LEVEL_ALL);
     // LogComponentEnable("EnvironmentCreator", ns3::LOG_LEVEL_ALL);
     // LogComponentEnable("Socket", ns3::LOG_LEVEL_ALL);

@@ -1,11 +1,11 @@
-#include <ns3/callback.h>
-#include <ns3/defiance-module.h>
-#include <ns3/test.h>
+#include "ns3/callback.h"
+#include "ns3/defiance-module.h"
+#include "ns3/test.h"
 
 using namespace ns3;
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  *
  * Test to check if AgentApplication can communicate with registered interfaces of all app types
  */
@@ -249,9 +249,9 @@ AgentAppTestCase::DoRun()
 }
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  *
- * \brief TestSuite for AgentApp
+ * @brief TestSuite for AgentApp
  */
 class AgentAppTestSuite : public TestSuite
 {
@@ -260,9 +260,9 @@ class AgentAppTestSuite : public TestSuite
 };
 
 AgentAppTestSuite::AgentAppTestSuite()
-    : TestSuite("defiance-agent-application", UNIT)
+    : TestSuite("defiance-agent-application", Type::UNIT)
 {
-    AddTestCase(new AgentAppTestCase, TestCase::QUICK);
+    AddTestCase(new AgentAppTestCase, Duration::QUICK);
 }
 
 static AgentAppTestSuite sAgentAppTestSuite; //!< Static variable for test initialization

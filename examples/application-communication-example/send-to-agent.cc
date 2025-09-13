@@ -1,12 +1,12 @@
-#include <ns3/base-test.h>
-#include <ns3/communication-helper.h>
-#include <ns3/internet-stack-helper.h>
-#include <ns3/ipv4-address-helper.h>
-#include <ns3/mobility-helper.h>
-#include <ns3/mobility-model.h>
-#include <ns3/point-to-point-helper.h>
-#include <ns3/reward-application.h>
-#include <ns3/rl-application-helper.h>
+#include "ns3/base-test.h"
+#include "ns3/communication-helper.h"
+#include "ns3/internet-stack-helper.h"
+#include "ns3/ipv4-address-helper.h"
+#include "ns3/mobility-helper.h"
+#include "ns3/mobility-model.h"
+#include "ns3/point-to-point-helper.h"
+#include "ns3/reward-application.h"
+#include "ns3/rl-application-helper.h"
 
 #include <iostream>
 #include <vector>
@@ -16,7 +16,7 @@ using namespace ns3;
 NS_LOG_COMPONENT_DEFINE("ApplicationCommunicationExample");
 
 /**
- * \ingroup defiance
+ * @ingroup defiance
  * Child class of ObservationApp that unifies functionality to create
  * the appropriate DictContainer and functionality to allow calling
  * the callback object
@@ -24,8 +24,8 @@ NS_LOG_COMPONENT_DEFINE("ApplicationCommunicationExample");
 class TestObservation : public ObservationApplication
 {
   public:
-    TestObservation(){};
-    ~TestObservation() override{};
+    TestObservation() {};
+    ~TestObservation() override {};
     static TypeId GetTypeId();
     Ptr<OpenGymDictContainer> CreateDictContainer(std::vector<float> observation);
     void Observe(Ptr<const MobilityModel> observation);
@@ -76,15 +76,15 @@ TestObservation::RegisterCallbacks()
 }
 
 /**
- * \ingroup defiance
+ * @ingroup defiance
  * Child class of RewardApp that unifies functionality to create the appropriate DictContainer and
  * functionality to allow calling the callback object
  */
 class CallbackRewardApp : public RewardApplication
 {
   public:
-    CallbackRewardApp(){};
-    ~CallbackRewardApp() override{};
+    CallbackRewardApp() {};
+    ~CallbackRewardApp() override {};
     static TypeId GetTypeId();
     Ptr<OpenGymDictContainer> CreateDictContainer(std::vector<float> reward);
     void Reward(Ptr<const MobilityModel> observation);
@@ -140,7 +140,7 @@ CallbackRewardApp::RegisterCallbacks()
 class TestAgent : public AgentApplication
 {
   public:
-    TestAgent(){};
+    TestAgent() {};
 
     ~TestAgent() override = default;
     static TypeId GetTypeId();

@@ -7,9 +7,9 @@ namespace ns3
 {
 
 /**
- * \ingroup defiance
- * \class AggregatedInfo
- * \brief A helper class to store aggregated information about a single observation/reward. The
+ * @ingroup defiance
+ * @class AggregatedInfo
+ * @brief A helper class to store aggregated information about a single observation/reward. The
  * aggregated information includes the minimum, maximum, average and sum of the observation/reward
  * values.
  */

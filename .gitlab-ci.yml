@@ -12,7 +12,7 @@ stages:
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
   MYPY_CACHE_DIR: "$CI_PROJECT_DIR/.cache/mypy"
-  NS3_HOME: "$CI_PROJECT_DIR/source/ns-3.40"
+  NS3_HOME: "$CI_PROJECT_DIR/ns-3"
   DEVCONTAINER_IMAGE: $CI_REGISTRY/bp_defiance/bake-defiance:latest
   CCACHE_BASEDIR_VALUE: ns-3-ccache-storage
 

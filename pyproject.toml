@@ -62,7 +62,7 @@ pyarrow = "^21.0.0"
 scipy = "^1.12.0"
 pillow = "^10.2.0"
 lz4 = "^4.3.3"
-opencv-python = "^4.9.0.80"
+opencv-python = "^4.9.0"
 
 torch = { version = "^2.5.1", source = "pytorch-cpu" }
 

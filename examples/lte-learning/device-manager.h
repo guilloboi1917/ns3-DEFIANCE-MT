@@ -1,8 +1,8 @@
 #ifndef DEFIANCE_DEVICE_MANAGER_H
 #define DEFIANCE_DEVICE_MANAGER_H
 
-#include <ns3/net-device-container.h>
-#include <ns3/node-container.h>
+#include "ns3/net-device-container.h"
+#include "ns3/node-container.h"
 
 #include <map>
 
@@ -13,9 +13,9 @@ class MobComEnv;
 // Each class should be documented using Doxygen and have an \ingroup defiance directive
 
 /**
- * \ingroup defiance
- * \class DeviceManager
- * \brief Contains the information about the nodes and devices of the simulation. Maintains subsets
+ * @ingroup defiance
+ * @class DeviceManager
+ * @brief Contains the information about the nodes and devices of the simulation. Maintains subsets
  * ot these nodes and devices to work with.
  */
 class DeviceManager
@@ -61,7 +61,7 @@ class DeviceManager
     std::map<std::string, std::vector<uint32_t>>
         m_BsSubsets; // named subsets containing base station node / device indices
                      // Assumption: each node contains one device
-};                   // class DeviceManager
+}; // class DeviceManager
 } // namespace ns3
 
 #endif /* DEFIANCE__DEVICE_MANAGER_H */

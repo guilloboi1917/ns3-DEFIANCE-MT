@@ -6,9 +6,9 @@
 #include "observation-application.h"
 #include "reward-application.h"
 
-#include <ns3/ai-module.h>
-#include <ns3/node-container.h>
-#include <ns3/test.h>
+#include "ns3/ai-module.h"
+#include "ns3/node-container.h"
+#include "ns3/test.h"
 
 #include <vector>
 
@@ -62,9 +62,9 @@ MakeDictBoxContainer(uint32_t shape, std::string key, Params... params)
 }
 
 /**
- * \ingroup defiance-tests
- * \class RlAppBaseTestCase
- * \brief Base test case class that unifies setup functionality for different tests.
+ * @ingroup defiance-tests
+ * @class RlAppBaseTestCase
+ * @brief Base test case class that unifies setup functionality for different tests.
  * This is not a full test case yet, actual tests need to inherit from it.
  */
 class RlAppBaseTestCase : public TestCase
@@ -88,9 +88,9 @@ class RlAppBaseTestCase : public TestCase
 };
 
 /**
- * \ingroup defiance-tests
- * \class TestDataCollectorApp
- * \brief Simple DataCollecorApplication that can be reused for tests.
+ * @ingroup defiance-tests
+ * @class TestDataCollectorApp
+ * @brief Simple DataCollecorApplication that can be reused for tests.
  */
 class TestDataCollectorApp : public DataCollectorApplication
 {
@@ -98,17 +98,17 @@ class TestDataCollectorApp : public DataCollectorApplication
     TestDataCollectorApp();
     ~TestDataCollectorApp() override;
     /**
-     * \brief Get the type ID.
-     * \return the object TypeId.
+     * @brief Get the type ID.
+     * @return the object TypeId.
      */
     static TypeId GetTypeId();
     void CollectData(float data, int appId, int interfaceIndex);
     /**
-     * \brief Executes the callback registered in \c RegisterCallbacks().
+     * @brief Executes the callback registered in \c RegisterCallbacks().
      * This allows to simulate the behaviour of a real tracing source by
      * calling \c ExecuteCallback() from outside this class.
      *
-     * \param arg argument which the callback will get
+     * @param arg argument which the callback will get
      */
     void ExecuteCallback(float arg, int arg2, int arg3);
     void RegisterCallbacks() override;
@@ -118,9 +118,9 @@ class TestDataCollectorApp : public DataCollectorApplication
 };
 
 /**
- * \ingroup DEFIANCE-tests
- * \class TestObservationApp
- * \brief Simple ObservationApplication that can be reused for tests.
+ * @ingroup DEFIANCE-tests
+ * @class TestObservationApp
+ * @brief Simple ObservationApplication that can be reused for tests.
  */
 class TestObservationApp : public ObservationApplication
 {
@@ -128,17 +128,17 @@ class TestObservationApp : public ObservationApplication
     TestObservationApp();
     ~TestObservationApp() override;
     /**
-     * \brief Get the type ID.
-     * \return the object TypeId.
+     * @brief Get the type ID.
+     * @return the object TypeId.
      */
     static TypeId GetTypeId();
     virtual void Observe(float observation, int appId, int interfaceIndex);
     /**
-     * \brief Executes the callback registered in \c RegisterCallbacks().
+     * @brief Executes the callback registered in \c RegisterCallbacks().
      * This allows to simulate the behaviour of a real tracing source by
      * calling \c ExecuteCallback() from outside this class.
      *
-     * \param arg argument which the callback will get
+     * @param arg argument which the callback will get
      */
     void ExecuteCallback(float arg, int arg2, int arg3);
     void RegisterCallbacks() override;
@@ -148,9 +148,9 @@ class TestObservationApp : public ObservationApplication
 };
 
 /**
- * \ingroup DEFIANCE-tests
- * \class TestRewardApp
- * \brief Simple RewardApplication that can be reused for tests.
+ * @ingroup DEFIANCE-tests
+ * @class TestRewardApp
+ * @brief Simple RewardApplication that can be reused for tests.
  */
 class TestRewardApp : public RewardApplication
 {
@@ -158,17 +158,17 @@ class TestRewardApp : public RewardApplication
     TestRewardApp();
     ~TestRewardApp() override;
     /**
-     * \brief Get the type ID.
-     * \return the object TypeId.
+     * @brief Get the type ID.
+     * @return the object TypeId.
      */
     static TypeId GetTypeId();
     virtual void Reward(float reward, int appId, int interfaceIndex);
     /**
-     * \brief Executes the callback registered in \c RegisterCallbacks().
+     * @brief Executes the callback registered in \c RegisterCallbacks().
      * This allows to simulate the behaviour of a real tracing source by
      * calling \c ExecuteCallback() from outside this class.
      *
-     * \param arg argument which the callback will get
+     * @param arg argument which the callback will get
      */
     void ExecuteCallback(float arg, int arg2, int arg3);
     void RegisterCallbacks() override;
@@ -178,14 +178,14 @@ class TestRewardApp : public RewardApplication
 };
 
 /**
- * \ingroup DEFIANCE-tests
- * \class TestAgentApp
- * \brief Simple AgentApplication that can be reused for tests.
+ * @ingroup DEFIANCE-tests
+ * @class TestAgentApp
+ * @brief Simple AgentApplication that can be reused for tests.
  */
 class TestAgentApp : public AgentApplication
 {
   public:
-    TestAgentApp(){};
+    TestAgentApp() {};
 
     ~TestAgentApp() override = default;
     static TypeId GetTypeId();
@@ -208,9 +208,9 @@ class TestAgentApp : public AgentApplication
 };
 
 /**
- * \ingroup DEFIANCE-tests
- * \class TestActionApp
- * \brief Simple ActionApplication that can be reused for tests.
+ * @ingroup DEFIANCE-tests
+ * @class TestActionApp
+ * @brief Simple ActionApplication that can be reused for tests.
  */
 class TestActionApp : public ActionApplication
 {
@@ -218,8 +218,8 @@ class TestActionApp : public ActionApplication
     TestActionApp();
     virtual ~TestActionApp();
     /**
-     * \brief Get the type ID.
-     * \return the object TypeId.
+     * @brief Get the type ID.
+     * @return the object TypeId.
      */
     static TypeId GetTypeId();
     void ExecuteAction(uint remoteAppId, Ptr<OpenGymDictContainer> action) override;

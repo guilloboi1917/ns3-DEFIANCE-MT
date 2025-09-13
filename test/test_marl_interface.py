@@ -49,7 +49,7 @@ def test_ai_interface(env: Ns3MultiAgentEnv) -> None:
     stop_requested = False
     stepped = False
     while not stop_requested:
-        action = env.action_space[agent].sample()
+        action = env.action_spaces[agent].sample()
         states = env.step({agent: action})
         assert all(isinstance(state, dict) for state in states)
         if states[2].pop("__all__") or states[3].pop("__all__"):
@@ -66,7 +66,7 @@ def test_echo_interface(env: Ns3MultiAgentEnv) -> None:
     agent, observation = only(env.reset()[0].items())
     terminated = False
     while not terminated:
-        action = env.action_space[agent].sample()
+        action = env.action_spaces[agent].sample()
         states = env.step({agent: action})
         if states[2].pop("__all__") or states[3].pop("__all__"):
             break
@@ -82,7 +82,7 @@ def test_counting_agent(env: Ns3MultiAgentEnv) -> None:
     agent, observation = only(env.reset()[0].items())
     for i in range(1, COUNTING_AGENT_APP_LIMIT):
         assert i == only(observation)
-        action = env.action_space[agent].sample()
+        action = env.action_spaces[agent].sample()
         states = env.step({agent: action})
         states[2].pop("__all__")
         states[3].pop("__all__")

@@ -1,11 +1,11 @@
-#include <ns3/callback.h>
-#include <ns3/defiance-module.h>
-#include <ns3/test.h>
+#include "ns3/callback.h"
+#include "ns3/defiance-module.h"
+#include "ns3/test.h"
 
 using namespace ns3;
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  * Test to check if data can be sent to a single interface
  */
 class DataCollectorAppOneInterfaceTestCase : public RlAppBaseTestCase
@@ -61,7 +61,7 @@ DataCollectorAppOneInterfaceTestCase::Simulate()
 }
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  * Test to check if data can be sent to all interfaces
  */
 class DataCollectorAppAllInterfacesTestCase : public RlAppBaseTestCase
@@ -117,7 +117,7 @@ DataCollectorAppAllInterfacesTestCase::Simulate()
 }
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  * Test to check if data can be sent to a custom number of interfaces
  */
 
@@ -174,7 +174,7 @@ DataCollectorAppOneAppTestCase::Simulate()
 }
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  * Test to check if interfaces can be deleted and added after setup
  */
 
@@ -255,9 +255,9 @@ DataCollectorAppDynamicTestCase::Simulate()
 }
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  *
- * \brief TestSuite for DataCollectorApp
+ * @brief TestSuite for DataCollectorApp
  */
 class DataCollectorAppTestSuite : public TestSuite
 {
@@ -266,12 +266,12 @@ class DataCollectorAppTestSuite : public TestSuite
 };
 
 DataCollectorAppTestSuite::DataCollectorAppTestSuite()
-    : TestSuite("defiance-data-collector-application", UNIT)
+    : TestSuite("defiance-data-collector-application", Type::UNIT)
 {
-    AddTestCase(new DataCollectorAppOneInterfaceTestCase, TestCase::QUICK);
-    AddTestCase(new DataCollectorAppAllInterfacesTestCase, TestCase::QUICK);
-    AddTestCase(new DataCollectorAppOneAppTestCase, TestCase::QUICK);
-    AddTestCase(new DataCollectorAppDynamicTestCase, TestCase::QUICK);
+    AddTestCase(new DataCollectorAppOneInterfaceTestCase, Duration::QUICK);
+    AddTestCase(new DataCollectorAppAllInterfacesTestCase, Duration::QUICK);
+    AddTestCase(new DataCollectorAppOneAppTestCase, Duration::QUICK);
+    AddTestCase(new DataCollectorAppDynamicTestCase, Duration::QUICK);
 }
 
 static DataCollectorAppTestSuite

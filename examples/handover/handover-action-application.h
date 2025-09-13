@@ -1,7 +1,7 @@
-#include <ns3/action-application.h>
-#include <ns3/lte-enb-net-device.h>
-#include <ns3/lte-helper.h>
-#include <ns3/lte-ue-net-device.h>
+#include "ns3/action-application.h"
+#include "ns3/lte-enb-net-device.h"
+#include "ns3/lte-helper.h"
+#include "ns3/lte-ue-net-device.h"
 
 using namespace ns3;
 
@@ -12,8 +12,8 @@ extern uint32_t g_noopHandovers;
 extern uint32_t g_sameCellHandovers;
 
 /**
- * \ingroup defiance
- * \brief Child class of ActionApplication that checks validity of and executes handover actions.
+ * @ingroup defiance
+ * @brief Child class of ActionApplication that checks validity of and executes handover actions.
  */
 class HandoverActionApplication : public ActionApplication
 {

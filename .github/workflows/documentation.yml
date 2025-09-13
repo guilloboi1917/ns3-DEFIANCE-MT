@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 env:
-  NS3_HOME: source/ns-3.40
+  NS3_HOME: ns-3
 
 permissions:
   contents: read
@@ -25,14 +25,14 @@ jobs:
       image: ghcr.io/defiance-project/bake-defiance:full-latest
       env:
         NS3_HOME: ${{ env.NS3_HOME }}
-    
+
     concurrency:
       group: "pages"
       cancel-in-progress: false
 
     steps:
       - name: Activate repository
-        run: ln -s /code/source .
+        run: ln -s /code/ns-3 .
 
       - name: Checkout repository
         uses: actions/checkout@v4

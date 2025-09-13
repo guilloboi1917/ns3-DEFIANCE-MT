@@ -6,9 +6,9 @@
 namespace ns3
 {
 /**
- * \ingroup defiance
- * \class RewardApplication
- * \brief This application is installed on a node where rewards are calculated.
+ * @ingroup defiance
+ * @class RewardApplication
+ * @brief This application is installed on a node where rewards are calculated.
  *
  * Instances of this class do not send any data if they are not registered at a callback. To send
  * rewards this class should be inherited by a class which is registered at a callback and which
@@ -27,8 +27,8 @@ class RewardApplication : public DataCollectorApplication
     ~RewardApplication();
 
     /**
-     * \brief Get the type ID.
-     * \return the object TypeId.
+     * @brief Get the type ID.
+     * @return the object TypeId.
      */
     static TypeId GetTypeId();
 };

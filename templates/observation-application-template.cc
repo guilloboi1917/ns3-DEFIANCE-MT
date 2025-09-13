@@ -1,11 +1,11 @@
-#include <ns3/defiance-module.h>
-#include <ns3/observation-application.h>
+#include "ns3/defiance-module.h"
+#include "ns3/observation-application.h"
 
 class TemplateObservationApplication : public ObservationApplication
 {
   public:
     TemplateObservationApplication()
-        : ObservationApplication(){};
+        : ObservationApplication() {};
 
     ~TemplateObservationApplication() override = default;
 

@@ -1,19 +1,19 @@
-#include <ns3/defiance-module.h>
-#include <ns3/ns3-ai-multi-agent-gym-interface.h>
-#include <ns3/test.h>
+#include "ns3/defiance-module.h"
+#include "ns3/ns3-ai-multi-agent-gym-interface.h"
+#include "ns3/test.h"
 
 using namespace ns3;
 
 /**
- * \ingroup defiance
- * \ingroup tests
- * \ingroup marl-tests
+ * @ingroup defiance
+ * @ingroup tests
+ * @ingroup marl-tests
  * Test suite for simple marl interface tests
  */
 class SimpleMarlInterfaceTestSuite : public TestSuite
 {
   public:
-    SimpleMarlInterfaceTestSuite(std::string name = "marl-interface", Type type = UNIT);
+    SimpleMarlInterfaceTestSuite(std::string name = "marl-interface", Type type = Type::UNIT);
 
   protected:
     void SetupCallbacks();
@@ -68,14 +68,14 @@ SimpleMarlInterfaceTestSuite::SetupCallbacks()
 }
 
 /**
- * \ingroup marl-tests
+ * @ingroup marl-tests
  * Test case for registering callbacks
  */
 class EchoMarlInterfaceTestSuite : public SimpleMarlInterfaceTestSuite
 {
   public:
     EchoMarlInterfaceTestSuite()
-        : SimpleMarlInterfaceTestSuite("marl-echo-action-interface", UNIT)
+        : SimpleMarlInterfaceTestSuite("marl-echo-action-interface", Type::UNIT)
     {
     }
 
@@ -138,8 +138,8 @@ EchoMarlInterfaceTestSuite::SendNewAction(int i, Ptr<OpenGymDataContainer> actio
 class TestObservation : public ObservationApplication
 {
   public:
-    TestObservation(){};
-    ~TestObservation() override{};
+    TestObservation() {};
+    ~TestObservation() override {};
     static TypeId GetTypeId();
     void RegisterCallbacks() override;
 };
@@ -234,14 +234,14 @@ EchoAgentApplication::GetTypeId()
 NS_OBJECT_ENSURE_REGISTERED(TestObservation);
 
 /**
- * \ingroup marl-tests
+ * @ingroup marl-tests
  * Test case for registering callbacks
  */
 class MarlAgentInterfaceTestSuite : public SimpleMarlInterfaceTestSuite
 {
   public:
     MarlAgentInterfaceTestSuite()
-        : SimpleMarlInterfaceTestSuite("marl-agent-interface", UNIT)
+        : SimpleMarlInterfaceTestSuite("marl-agent-interface", Type::UNIT)
     {
     }
 
@@ -272,7 +272,7 @@ class MarlAgentInterfaceTestSuite : public SimpleMarlInterfaceTestSuite
 };
 
 /**
- * \ingroup defiance-tests
+ * @ingroup defiance-tests
  * Static variables for test initialization
  */
 static SimpleMarlInterfaceTestSuite sMarlInterfaceTestSuite;

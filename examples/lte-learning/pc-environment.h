@@ -4,11 +4,11 @@
 #include "base-environment.h"
 #include "device-manager.h"
 
-#include <ns3/ai-module.h>
-#include <ns3/applications-module.h>
-#include <ns3/core-module.h>
-#include <ns3/mobility-helper.h>
-#include <ns3/point-to-point-module.h>
+#include "ns3/ai-module.h"
+#include "ns3/applications-module.h"
+#include "ns3/core-module.h"
+#include "ns3/mobility-helper.h"
+#include "ns3/point-to-point-module.h"
 
 #include <string>
 
@@ -16,9 +16,9 @@ namespace ns3
 {
 
 /**
- * \ingroup defiance
+ * @ingroup defiance
  *
- * \brief Single agent environment for training power control with reinforcement learning.
+ * @brief Single agent environment for training power control with reinforcement learning.
  */
 class PowerControlMobComEnv : public MobComEnv
 {

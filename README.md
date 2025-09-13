@@ -9,33 +9,29 @@ For a practical example of how our framework is used, see [this Medium article](
 
 ## Setup the development environment
 
-### Installation with bake
+### Installation with setup helper
 
 See <https://github.com/DEFIANCE-project/bake-defiance> for easy instructions.
+Despite the name, it doesn't use bake anymore.
 
 ### Docker
 
-If you just want a docker container with a built ns3-defiance, head to <https://github.com/DEFIANCE-project/bake-defiance> and follow the steps to build the full image `defiance-full`.
+If you just want a docker container ready to build ns3-defiance, pull <ghcr.io/defiance-project/bake-defiance:full-latest>.
 
-For users with a hpi login, you can add `--build-arg BASE=registry.gitlab.hpi.de/bp_defiance/bake-defiance:latest-full`
-after you logged in with `docker login registry.gitlab.hpi.de` instead of building `defiance-full` manually.
-
-For development, we supply a `Dockerfile` here, in which you can build your custom changes to ns3-defiance. It builds upon `defiance-full`, so make sure you have built or downloaded it beforehand.
+For development, we supply a `Dockerfile` here, in which you can build your custom changes to ns3-defiance. It builds upon the aforementioned docker image.
 Then, you can build a docker image containing your local changes with a simple `docker build .`.
 The ns3 root directory is at `$NS3_HOME`; the default working directory.
 By default, ns3 and ns3-defiance are built directly. To skip the build, add `--build-arg BUILD_NS3=False`.
 
-### Installation without bake
-
-The manual way:
+### Manual installation
 
 Requirements: Depending on your use-case, different dependencies are needed. For a complete list of all possible
 development dependencies, refer
 to [our devcontainer Dockerfile](https://github.com/DEFIANCE-project/bake-defiance/blob/main/.devcontainer/Dockerfile#L9)
 
-1. Clone ns3 `git clone https://gitlab.com/nsnam/ns-3-dev.git -b ns-3.40`
-2. Some of our code needs that the environment variable `NS3_HOME` is set. Set it with `export NS3_HOME=$(pwd)/ns-3.40`
-3. Clone ns3-ai and ns3-defiance into `ns3/contrib`:
+1. Clone ns3 `git clone https://gitlab.com/nsnam/ns-3-dev.git -b ns-3.XX`
+1. Some of our code needs that the environment variable `NS3_HOME` is set. Set it with `export NS3_HOME=$(pwd)/ns-3.XX`
+1. Clone ns3-ai and ns3-defiance into `ns3/contrib`:
 
     ```shell-c
    cd ns-3-dev/
@@ -43,15 +39,14 @@ to [our devcontainer Dockerfile](https://github.com/DEFIANCE-project/bake-defian
    git clone https://github.com/DEFIANCE-project/ns3-defiance contrib/defiance
     ```
 
-4. Make sure, you have all dependencies. Running `./ns3 configure --enable-python --enable-examples --enable-tests`
+1. Install the python dependency of defiance with poetry: `poetry -C contrib/defiance install --without local` and activate the venv.
+1. Make sure, you have all other dependencies. Running `./ns3 configure --enable-python --enable-examples --enable-tests`
    should succeed.
-5. Then, compile ns3-ai to generate the message types with protobuf: `./ns3 build ai`
-6. Install the python requirements with `poetry install -C contrib/defiance`
-7. Manually install the ns3-ai message
-   types: `pip install -e ./contrib/ai/python_utils -e ./contrib/ai/model/gym-interface/py`
-8. Compile everything with `./ns3 build`
-9. You are now able to start the training of our example scenario, such as `defiance-balance2`
-   with `run-agent train -n defiance-balance2`. See `run-agent --help` for more info.
+1. Then, compile ns3-ai to generate the message types with protobuf: `./ns3 build ai`
+1. Install the python packages of ns3-ai with `poetry -C contrib/defiance install --with local`
+1. Compile everything with `./ns3 build`
+1. You are now able to start the training of our example scenario, such as `defiance-balance2`
+   with `run-agent train -n defiance-handover`. See `run-agent --help` for more info.
 
 ### Development tools
 
