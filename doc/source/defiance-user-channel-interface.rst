@@ -82,8 +82,8 @@ Here is an example of how to use the :code:`SimpleChannelInterface`:
     Ptr<OpenGymDictContainer>
     CreateTestMessage(float value)
     {
-        Ptr<OpenGymDictContainer> msg = Create<OpenGymDictContainer>();
-        Ptr<OpenGymBoxContainer<float>> box = Create<OpenGymBoxContainer<float>>();
+        Ptr<OpenGymDictContainer> msg = CreateObject<OpenGymDictContainer>();
+        Ptr<OpenGymBoxContainer<float>> box = CreateObject<OpenGymBoxContainer<float>>();
         box->AddValue(value);
         msg->Add("box", box);
         return msg;
@@ -159,8 +159,8 @@ Here is an example of how to use the :code:`SocketChannelInterface`:
     Ptr<OpenGymDictContainer>
     CreateTestMessage(float value)
     {
-        Ptr<OpenGymDictContainer> msg = Create<OpenGymDictContainer>();
-        Ptr<OpenGymBoxContainer<float>> box = Create<OpenGymBoxContainer<float>>();
+        Ptr<OpenGymDictContainer> msg = CreateObject<OpenGymDictContainer>();
+        Ptr<OpenGymBoxContainer<float>> box = CreateObject<OpenGymBoxContainer<float>>();
         box->AddValue(value);
         msg->Add("box", box);
         return msg;

@@ -287,19 +287,19 @@ SimpleChannelInterfaceReceiveTestCase::RecvCallback(std::string& string,
 void
 SimpleChannelInterfaceReceiveTestCase::Simulate()
 {
-    Ptr<OpenGymDictContainer> msg1 = Create<OpenGymDictContainer>();
-    Ptr<OpenGymBoxContainer<float>> box1 = Create<OpenGymBoxContainer<float>>();
+    Ptr<OpenGymDictContainer> msg1 = CreateObject<OpenGymDictContainer>();
+    Ptr<OpenGymBoxContainer<float>> box1 = CreateObject<OpenGymBoxContainer<float>>();
     box1->AddValue(1.0);
     box1->AddValue(2.0);
     msg1->Add("box", box1);
 
-    Ptr<OpenGymDictContainer> msg2 = Create<OpenGymDictContainer>();
-    Ptr<OpenGymBoxContainer<float>> box2 = Create<OpenGymBoxContainer<float>>();
+    Ptr<OpenGymDictContainer> msg2 = CreateObject<OpenGymDictContainer>();
+    Ptr<OpenGymBoxContainer<float>> box2 = CreateObject<OpenGymBoxContainer<float>>();
     box2->AddValue(3.0);
     box2->AddValue(4.0);
     msg2->Add("box", box2);
 
-    Ptr<OpenGymDictContainer> msg3 = Create<OpenGymDictContainer>(); // Empty message
+    Ptr<OpenGymDictContainer> msg3 = CreateObject<OpenGymDictContainer>(); // Empty message
 
     std::string defaultA = "defaultA";
     std::string defaultB = "defaultB";

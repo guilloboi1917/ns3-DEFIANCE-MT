@@ -31,7 +31,7 @@ class TemplateAgentApplication : public AgentApplication
         // you can do something with received observations in m_obsDataStruct
         // auto latestObservation = m_obsDataStruct.GetNewestByID(0);
         // you can send a message to another agent
-        // Ptr<OpenGymDictContainer> dictContainer = Create<OpenGymDictContainer>();
+        // Ptr<OpenGymDictContainer> dictContainer = CreateObject<OpenGymDictContainer>();
         // SendToAgent(dictContainer, 1, 0);
     }
 

@@ -84,7 +84,7 @@ HandoverObservationApplication::Observe(uint64_t imsi,
             rsrqs->AddValue(obs.second);
         }
         NS_LOG_INFO("RSRPs: " << rsrps << " RSRQs: " << rsrqs << " CellId: " << cellId);
-        auto observationDict = Create<OpenGymDictContainer>();
+        auto observationDict = CreateObject<OpenGymDictContainer>();
         observationDict->Add("rsrps", rsrps);
         observationDict->Add("rsrqs", rsrqs);
         observationDict->Add("cellId", MakeBoxContainer<int32_t>(1, (int32_t)cellId));

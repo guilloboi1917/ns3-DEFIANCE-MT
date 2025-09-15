@@ -11,8 +11,8 @@ NS_LOG_COMPONENT_DEFINE("EnvironmentCreatorExample");
 Ptr<OpenGymDictContainer>
 CreateTestMessage(float value)
 {
-    auto msg = Create<OpenGymDictContainer>();
-    auto box = Create<OpenGymBoxContainer<float>>();
+    auto msg = CreateObject<OpenGymDictContainer>();
+    auto box = CreateObject<OpenGymBoxContainer<float>>();
     box->AddValue(value);
     msg->Add("box", box);
     return msg;
