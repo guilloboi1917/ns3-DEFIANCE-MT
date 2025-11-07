@@ -1,3 +1,11 @@
+if (NOT libai)
+    message(
+      ${HIGHLIGHTED_STATUS}
+      "Skipping contrib/defiance: ns3-ai not found"
+    )
+    return()
+endif()
+
 check_include_file_cxx(stdint.h HAVE_STDINT_H)
 if(HAVE_STDINT_H)
     add_definitions(-DHAVE_STDINT_H)
