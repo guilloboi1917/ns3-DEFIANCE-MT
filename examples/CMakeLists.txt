@@ -39,8 +39,8 @@ build_lib_example(
 )
 
 build_lib_example(
-        NAME defiance-send-to-agent
-        SOURCE_FILES application-communication-example/send-to-agent.cc
+        NAME defiance-application-communication
+        SOURCE_FILES application-communication-example/application-communication-example.cc
         LIBRARIES_TO_LINK
                 ${libdefiance}
                 ${liblte}

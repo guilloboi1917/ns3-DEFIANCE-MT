@@ -17,94 +17,88 @@ NS_LOG_COMPONENT_DEFINE("ApplicationCommunicationExample");
 
 /**
  * @ingroup defiance
- * Child class of ObservationApp that unifies functionality to create
- * the appropriate DictContainer and functionality to allow calling
- * the callback object
+ * Observation application that registers to a callback to observe
+ * the current position of the node it is installed on. This position is
+ * packed into a DictContainer and sent to all registered agent applications.
  */
-class TestObservation : public ObservationApplication
+class PositionObservationApp : public ObservationApplication
 {
   public:
-    TestObservation() {};
-    ~TestObservation() override {};
+    PositionObservationApp() {};
+    ~PositionObservationApp() override {};
     static TypeId GetTypeId();
-    Ptr<OpenGymDictContainer> CreateDictContainer(std::vector<float> observation);
+    Ptr<OpenGymDictContainer> CreateDictContainer(float x, float y, float z);
     void Observe(Ptr<const MobilityModel> observation);
     void RegisterCallbacks() override;
 };
 
-NS_OBJECT_ENSURE_REGISTERED(TestObservation);
+NS_OBJECT_ENSURE_REGISTERED(PositionObservationApp);
 
 TypeId
-TestObservation::GetTypeId()
+PositionObservationApp::GetTypeId()
 {
     static TypeId tid = TypeId("ns3::TestObservation")
                             .SetParent<ObservationApplication>()
                             .SetGroupName("defiance")
-                            .AddConstructor<TestObservation>();
+                            .AddConstructor<PositionObservationApp>();
     return tid;
 }
 
 Ptr<OpenGymDictContainer>
-TestObservation::CreateDictContainer(std::vector<float> observation)
+PositionObservationApp::CreateDictContainer(float x, float y, float z)
 {
-    auto box = MakeBoxContainer<float>(3);
-    for (auto val : observation)
-    {
-        box->AddValue(val);
-    }
-
     auto dictContainer = CreateObject<OpenGymDictContainer>();
-    dictContainer->Add("floatObs", box);
+    dictContainer->Add("position-x", MakeBoxContainer<float, float>(1, x));
+    dictContainer->Add("position-y", MakeBoxContainer<float, float>(1, y));
+    dictContainer->Add("position-z", MakeBoxContainer<float, float>(1, z));
     return dictContainer;
 }
 
 void
-TestObservation::Observe(Ptr<const MobilityModel> observation)
+PositionObservationApp::Observe(Ptr<const MobilityModel> observation)
 {
     std::vector<float> obs;
-    obs.push_back(observation->GetPosition().x);
-    obs.push_back(observation->GetPosition().y);
-    obs.push_back(observation->GetPosition().z);
-    Send(CreateDictContainer(obs), 0);
+    Send(CreateDictContainer(observation->GetPosition().x, observation->GetPosition().y, observation->GetPosition().z), 0);
 }
 
 void
-TestObservation::RegisterCallbacks()
+PositionObservationApp::RegisterCallbacks()
 {
     Config::ConnectWithoutContext("/NodeList/*/$ns3::MobilityModel/CourseChange",
-                                  MakeCallback(&TestObservation::Observe, this));
+                                  MakeCallback(&PositionObservationApp::Observe, this));
 }
 
 /**
  * @ingroup defiance
- * Child class of RewardApp that unifies functionality to create the appropriate DictContainer and
- * functionality to allow calling the callback object
+ * Reward application that observes the position of the node it is installed on.
+ * The distance to the origin of coordinates is sent as a reward to all registered
+ * agent applications.
  */
-class CallbackRewardApp : public RewardApplication
+class PositionRewardApp : public RewardApplication
 {
   public:
-    CallbackRewardApp() {};
-    ~CallbackRewardApp() override {};
+    PositionRewardApp() {};
+    ~PositionRewardApp() override {};
     static TypeId GetTypeId();
     Ptr<OpenGymDictContainer> CreateDictContainer(std::vector<float> reward);
     void Reward(Ptr<const MobilityModel> observation);
     void RegisterCallbacks() override;
 };
 
-NS_OBJECT_ENSURE_REGISTERED(CallbackRewardApp);
+NS_OBJECT_ENSURE_REGISTERED(PositionRewardApp);
 
 TypeId
-CallbackRewardApp::GetTypeId()
+PositionRewardApp::GetTypeId()
 {
     static TypeId tid = TypeId("ns3::CallbackRewardApp")
                             .SetParent<RewardApplication>()
                             .SetGroupName("defiance")
-                            .AddConstructor<CallbackRewardApp>();
+                            .AddConstructor<PositionRewardApp>();
     return tid;
 }
 
 Ptr<OpenGymDictContainer>
-CallbackRewardApp::CreateDictContainer(std::vector<float> reward)
+PositionRewardApp::CreateDictContainer(std::vector<float> reward)
 {
     auto box = MakeBoxContainer<float>(3);
     for (auto val : reward)
@@ -113,12 +107,12 @@ CallbackRewardApp::CreateDictContainer(std::vector<float> reward)
     }
 
     auto dictContainer = CreateObject<OpenGymDictContainer>();
-    dictContainer->Add("floatReward", box);
+    dictContainer->Add("distance", box);
     return dictContainer;
 }
 
 void
-CallbackRewardApp::Reward(Ptr<const MobilityModel> observation)
+PositionRewardApp::Reward(Ptr<const MobilityModel> observation)
 {
     std::vector<float> obs;
     obs.push_back(observation->GetPosition().x);
@@ -131,36 +125,43 @@ CallbackRewardApp::Reward(Ptr<const MobilityModel> observation)
 }
 
 void
-CallbackRewardApp::RegisterCallbacks()
+PositionRewardApp::RegisterCallbacks()
 {
     Config::ConnectWithoutContext("/NodeList/*/$ns3::MobilityModel/CourseChange",
-                                  MakeCallback(&CallbackRewardApp::Reward, this));
+                                  MakeCallback(&PositionRewardApp::Reward, this));
 }
 
-class TestAgent : public AgentApplication
+/**
+ * @ingroup defiance
+ * Agent application that receives positions from observation and reward applications
+ * and outputs some aggregated statistics about them.
+ */
+class PositionAgentApp : public AgentApplication
 {
   public:
-    TestAgent() {};
+    PositionAgentApp() {};
 
-    ~TestAgent() override = default;
+    ~PositionAgentApp() override = default;
     static TypeId GetTypeId();
 
     void OnRecvObs(uint remoteAppId) override
     {
-        NS_LOG_INFO("received Observation from " << remoteAppId);
+        NS_LOG_INFO("Received observation from observation interface " << remoteAppId << ":");
         NS_LOG_INFO(
-            "avg: " << m_obsDataStruct.AggregateNewest(remoteAppId, 10)["floatObs"].GetAvg());
+            "\t Last x coordinate: " << m_obsDataStruct.GetNewestByID(remoteAppId)->data->Get("position-x")->GetObject<OpenGymBoxContainer<float>>()->GetValue(0));
         NS_LOG_INFO(
-            "min: " << m_obsDataStruct.AggregateNewest(remoteAppId, 10)["floatObs"].GetMin());
+            "\t Average over 10 last y coordinates:" << m_obsDataStruct.AggregateNewest(remoteAppId, 10)["position-y"].GetAvg());
         NS_LOG_INFO(
-            "max: " << m_obsDataStruct.AggregateNewest(remoteAppId, 10)["floatObs"].GetMax());
+            "\t Minimum of 10 last z coordinates: " << m_obsDataStruct.AggregateNewest(remoteAppId, 10)["position-z"].GetMin());
+        NS_LOG_INFO(
+            "\t Maximum of 10 last z coordinates: " << m_obsDataStruct.AggregateNewest(remoteAppId, 10)["position-z"].GetMax());
     }
 
     void OnRecvReward(uint remoteAppId) override
     {
-        NS_LOG_INFO("received reward from reward interface " << remoteAppId);
+        NS_LOG_INFO("Received reward from reward interface " << remoteAppId << ":");
         NS_LOG_INFO(
-            "avg: " << m_rewardDataStruct.AggregateNewest(remoteAppId)["floatReward"].GetAvg());
+            "\t Last distance: " << m_rewardDataStruct.AggregateNewest(remoteAppId)["distance"].GetAvg());
     }
 
     Ptr<OpenGymSpace> GetObservationSpace() override;
@@ -168,23 +169,23 @@ class TestAgent : public AgentApplication
 };
 
 TypeId
-TestAgent::GetTypeId()
+PositionAgentApp::GetTypeId()
 {
-    static TypeId tid = TypeId("ns3::TestAgent")
+    static TypeId tid = TypeId("ns3::PositionAgentApp")
                             .SetParent<AgentApplication>()
                             .SetGroupName("defiance")
-                            .AddConstructor<TestAgent>();
+                            .AddConstructor<PositionAgentApp>();
     return tid;
 }
 
 Ptr<OpenGymSpace>
-TestAgent::GetObservationSpace()
+PositionAgentApp::GetObservationSpace()
 {
     return {};
 }
 
 Ptr<OpenGymSpace>
-TestAgent::GetActionSpace()
+PositionAgentApp::GetActionSpace()
 {
     return {};
 }
@@ -193,19 +194,6 @@ int
 main(int argc, char* argv[])
 {
     LogComponentEnable("ApplicationCommunicationExample", LOG_LEVEL_INFO);
-
-    // Set up nodes with mobility model
-    NodeContainer observationNodes;
-    observationNodes.Create(2);
-    auto agentNode = CreateObject<Node>();
-    NodeContainer rewardNodes;
-    rewardNodes.Create(1);
-
-    Config::SetDefault("ns3::RandomWalk2dMobilityModel::Mode", StringValue("Time"));
-    Config::SetDefault("ns3::RandomWalk2dMobilityModel::Time", StringValue("2s"));
-    Config::SetDefault("ns3::RandomWalk2dMobilityModel::Speed",
-                       StringValue("ns3::ConstantRandomVariable[Constant=1.0]"));
-    Config::SetDefault("ns3::RandomWalk2dMobilityModel::Bounds", StringValue("0|200|0|200"));
 
     uint32_t seed = 1;
     uint32_t runId = 0;
@@ -224,6 +212,13 @@ main(int argc, char* argv[])
     RngSeedManager::SetSeed(seed + parallel);
     RngSeedManager::SetRun(runId);
     Ns3AiMsgInterface::Get()->SetTrialName(trialName);
+
+    // Set up nodes with mobility model
+    NodeContainer observationNodes;
+    observationNodes.Create(2);
+    auto agentNode = CreateObject<Node>();
+    NodeContainer rewardNodes;
+    rewardNodes.Create(1);
 
     MobilityHelper mobility;
     mobility.SetPositionAllocator("ns3::RandomDiscPositionAllocator",
@@ -249,23 +244,26 @@ main(int argc, char* argv[])
     helper.SetAttribute("StartTime", TimeValue(Seconds(0)));
     helper.SetAttribute("StopTime", TimeValue(Seconds(10)));
     RlApplicationContainer observationApps = helper.Install(observationNodes);
+
+    // Create and install reward app
     helper.SetTypeId("ns3::CallbackRewardApp");
     RlApplicationContainer rewardApps = helper.Install(rewardNodes);
 
     // Create and install agent app
-    auto agentApp = CreateObjectWithAttributes<TestAgent>("MaxObservationHistoryLength",
+    auto agentApp = CreateObjectWithAttributes<PositionAgentApp>("MaxObservationHistoryLength",
                                                           UintegerValue(10),
                                                           "MaxRewardHistoryLength",
                                                           UintegerValue(5));
     agentNode->AddApplication(agentApp);
 
+    // Create a CommunicationHelper and use it to assign IDs to the apps
     CommunicationHelper commHelper = CommunicationHelper();
-
     commHelper.SetObservationApps(observationApps);
     commHelper.SetAgentApps(RlApplicationContainer(agentApp));
     commHelper.SetRewardApps(rewardApps);
     commHelper.SetIds();
 
+    // Install the internet on the first observation node and the agent node
     NodeContainer internetNodes{observationNodes.Get(0), agentNode};
     PointToPointHelper p2p;
     p2p.SetDeviceAttribute("DataRate", StringValue("5Mbps"));
@@ -278,11 +276,17 @@ main(int argc, char* argv[])
     Ipv4InterfaceContainer interfaces = address.Assign(internetDevices);
 
     commHelper.AddCommunication(
-        {{observationApps.GetId(0),
+        {
+            // Connect the first observation app and the agent app via a socket channel interface
+            {observationApps.GetId(0),
           agentApp->GetId(),
           SocketCommunicationAttributes{interfaces.GetAddress(0), interfaces.GetAddress(1)}},
-         {observationApps.GetId(1), agentApp->GetId(), {}},
-         {rewardApps.GetId(0), agentApp->GetId(), {}}});
+            // Connect the second observation app and the agent app via a simple channel interface
+          {observationApps.GetId(1), agentApp->GetId(), {}},
+          // Connect the reward app and the agent app via a simple channel interface
+         {rewardApps.GetId(0), agentApp->GetId(), {}}
+        }
+    );
 
     commHelper.Configure();
     Simulator::Stop(Seconds(10));

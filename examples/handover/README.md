@@ -1,6 +1,6 @@
 # RL Handover training in ns-3
 
-This example demonstrates an example of how to train RL agents in ns-3 to learn handover decisions.
+This example demonstrates an example of how to train RL agents in *ns-3* to learn handover decisions.
 
 ## Scenario
 
