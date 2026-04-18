@@ -39,8 +39,16 @@ build_lib_example(
 )
 
 build_lib_example(
-        NAME defiance-application-communication
-        SOURCE_FILES application-communication-example/application-communication-example.cc
+        NAME defiance-app-communication-example
+        SOURCE_FILES 
+                app-communication-example/simulation.cc
+                app-communication-example/position-reward-app.cc
+                app-communication-example/position-observation-app.cc
+                app-communication-example/position-agent-app.cc
+        HEADER_FILES
+                app-communication-example/position-observation-app.h
+                app-communication-example/position-reward-app.h
+                app-communication-example/position-agent-app.h
         LIBRARIES_TO_LINK
                 ${libdefiance}
                 ${liblte}
