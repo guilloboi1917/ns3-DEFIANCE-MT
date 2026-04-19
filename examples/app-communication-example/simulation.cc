@@ -1,3 +1,8 @@
+#include "position-action-app.h"
+#include "position-agent-app.h"
+#include "position-observation-app.h"
+#include "position-reward-app.h"
+
 #include "ns3/base-test.h"
 #include "ns3/communication-helper.h"
 #include "ns3/internet-stack-helper.h"
@@ -9,11 +14,6 @@
 #include "ns3/rl-application-helper.h"
 
 #include <string>
-
-#include "position-observation-app.h"
-#include "position-reward-app.h"
-#include "position-agent-app.h"
-#include "position-action-app.h"
 
 using namespace ns3;
 
@@ -86,9 +86,8 @@ main(int argc, char* argv[])
     RlApplicationContainer actionApps = helper.Install(actionNodes);
 
     // Create and install agent app
-    auto agentApp = CreateObjectWithAttributes<PositionAgentApp>(
-                                                          "MaxRewardHistoryLength",
-                                                          UintegerValue(5));
+    auto agentApp =
+        CreateObjectWithAttributes<PositionAgentApp>("MaxRewardHistoryLength", UintegerValue(5));
     agentNode->AddApplication(agentApp);
 
     // Create a CommunicationHelper and use it to assign IDs to the apps
@@ -112,19 +111,16 @@ main(int argc, char* argv[])
     Ipv4InterfaceContainer interfaces = address.Assign(internetDevices);
 
     commHelper.AddCommunication(
-        {
-            // Connect the first observation app and the agent app via a socket channel interface
-            {observationApps.GetId(0),
+        {// Connect the first observation app and the agent app via a socket channel interface
+         {observationApps.GetId(0),
           agentApp->GetId(),
           SocketCommunicationAttributes{interfaces.GetAddress(0), interfaces.GetAddress(1)}},
-            // Connect the second observation app and the agent app via a simple channel interface
-          {observationApps.GetId(1), agentApp->GetId(), {}},
-          // Connect the reward app and the agent app via a simple channel interface
+         // Connect the second observation app and the agent app via a simple channel interface
+         {observationApps.GetId(1), agentApp->GetId(), {}},
+         // Connect the reward app and the agent app via a simple channel interface
          {rewardApps.GetId(0), agentApp->GetId(), {}},
          // Connect the agent app and the action app via a simple channel interface
-         {agentApp->GetId(), actionApps.GetId(0), {}}
-        }
-    );
+         {agentApp->GetId(), actionApps.GetId(0), {}}});
 
     commHelper.Configure();
     Simulator::Stop(Seconds(10));

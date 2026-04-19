@@ -1,6 +1,7 @@
 #include "position-action-app.h"
-#include "ns3/vector.h"
+
 #include "ns3/mobility-model.h"
+#include "ns3/vector.h"
 
 namespace ns3
 {
@@ -10,9 +11,9 @@ TypeId
 PositionActionApp::GetTypeId()
 {
     static TypeId tid = TypeId("ns3::PositionActionApp")
-        .SetParent<ActionApplication>()
-        .SetGroupName("defiance")
-        .AddConstructor<PositionActionApp>();
+                            .SetParent<ActionApplication>()
+                            .SetGroupName("defiance")
+                            .AddConstructor<PositionActionApp>();
     return tid;
 }
 

@@ -30,8 +30,10 @@ PositionRewardApp::CreateDictContainer(float reward)
 void
 PositionRewardApp::Reward(Ptr<const MobilityModel> observation)
 {
-    if (IsRunning()) {
-        // The reward is the length of the position vector, i.e. the distance to the origin of coordinates
+    if (IsRunning())
+    {
+        // The reward is the length of the position vector, i.e. the distance to the origin of
+        // coordinates
         float reward = observation->GetPosition().GetLength();
         Send(CreateDictContainer(reward), 0);
         NS_LOG_INFO("Reward app sent to agent app:");
@@ -43,7 +45,8 @@ void
 PositionRewardApp::RegisterCallbacks()
 {
     NS_LOG_FUNCTION(this);
-    Config::ConnectWithoutContext("/NodeList/" + std::to_string(GetNode()->GetId()) + "/$ns3::MobilityModel/CourseChange",
+    Config::ConnectWithoutContext("/NodeList/" + std::to_string(GetNode()->GetId()) +
+                                      "/$ns3::MobilityModel/CourseChange",
                                   MakeCallback(&PositionRewardApp::Reward, this));
 }
 

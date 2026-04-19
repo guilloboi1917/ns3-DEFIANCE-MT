@@ -40,7 +40,7 @@ build_lib_example(
 
 build_lib_example(
         NAME defiance-app-communication-example
-        SOURCE_FILES 
+        SOURCE_FILES
                 app-communication-example/simulation.cc
                 app-communication-example/position-reward-app.cc
                 app-communication-example/position-observation-app.cc

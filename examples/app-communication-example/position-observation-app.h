@@ -1,9 +1,8 @@
 #ifndef NS3_POSITION_OBSERVATION_APP_H
 #define NS3_POSITION_OBSERVATION_APP_H
 
-#include "ns3/observation-application.h"
 #include "ns3/mobility-model.h"
-
+#include "ns3/observation-application.h"
 
 namespace ns3
 {

@@ -1,8 +1,8 @@
 #ifndef NS3_POSITION_REWARD_APP_H
 #define NS3_POSITION_REWARD_APP_H
 
-#include "ns3/reward-application.h"
 #include "ns3/mobility-model.h"
+#include "ns3/reward-application.h"
 
 namespace ns3
 {

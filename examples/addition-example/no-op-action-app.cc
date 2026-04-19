@@ -13,9 +13,9 @@ TypeId
 NoOpActionApp::GetTypeId()
 {
     static TypeId tid = TypeId("ns3::NoOpActionApp")
-        .SetParent<ActionApplication>()
-        .SetGroupName("defiance")
-        .AddConstructor<NoOpActionApp>();
+                            .SetParent<ActionApplication>()
+                            .SetGroupName("defiance")
+                            .AddConstructor<NoOpActionApp>();
     return tid;
 }
 

@@ -7,7 +7,6 @@ namespace ns3
 {
 NS_LOG_COMPONENT_DEFINE("PositionObservationApp");
 
-
 TypeId
 PositionObservationApp::GetTypeId()
 {
@@ -30,7 +29,8 @@ PositionObservationApp::CreateDictContainer(Vector position, double velocity)
 void
 PositionObservationApp::Observe(Ptr<const MobilityModel> observation)
 {
-    if (IsRunning()) {
+    if (IsRunning())
+    {
         auto position = observation->GetPosition();
         auto totalVelocity = observation->GetVelocity().GetLength();
         Send(CreateDictContainer(position, totalVelocity), 0);
@@ -44,9 +44,10 @@ void
 PositionObservationApp::RegisterCallbacks()
 {
     NS_LOG_FUNCTION(this);
-    Config::ConnectWithoutContext("/NodeList/" + std::to_string(GetNode()->GetId()) + "/$ns3::MobilityModel/CourseChange",
+    Config::ConnectWithoutContext("/NodeList/" + std::to_string(GetNode()->GetId()) +
+                                      "/$ns3::MobilityModel/CourseChange",
                                   MakeCallback(&PositionObservationApp::Observe, this));
 }
 
 NS_OBJECT_ENSURE_REGISTERED(PositionObservationApp);
-}
+} // namespace ns3

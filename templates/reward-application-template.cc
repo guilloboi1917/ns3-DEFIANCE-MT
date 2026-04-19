@@ -19,11 +19,12 @@ class TemplateRewardApplication : public RewardApplication
     void Reward(Ptr<OpenGymDictContainer> observation)
     {
         // This is a custom function. You can rename it and change the signature according to your
-        // callback in RegisterCallbacks() that references this function. 
+        // callback in RegisterCallbacks() that references this function.
 
-        if (IsRunning()) { // Usually, observations shall only be processed if the application is running
-            // NS_LOG_INFO("Received observation"); 
-            // auto reward = Ptr<OpenGymDictContainer>(); 
+        if (IsRunning())
+        { // Usually, observations shall only be processed if the application is running
+            // NS_LOG_INFO("Received observation");
+            // auto reward = Ptr<OpenGymDictContainer>();
             // Send(reward, 0);
         }
     }
