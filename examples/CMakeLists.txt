@@ -45,10 +45,12 @@ build_lib_example(
                 app-communication-example/position-reward-app.cc
                 app-communication-example/position-observation-app.cc
                 app-communication-example/position-agent-app.cc
+                app-communication-example/position-action-app.cc
         HEADER_FILES
                 app-communication-example/position-observation-app.h
                 app-communication-example/position-reward-app.h
                 app-communication-example/position-agent-app.h
+                app-communication-example/position-action-app.h
         LIBRARIES_TO_LINK
                 ${libdefiance}
                 ${liblte}
@@ -56,7 +58,7 @@ build_lib_example(
 )
 
 build_lib_example(
-        NAME defiance-channel-interface
+        NAME defiance-channel-interface-example
         SOURCE_FILES channel-interface-example/channel-interface-example.cc
         LIBRARIES_TO_LINK
                 ${libdefiance}
@@ -134,18 +136,19 @@ build_lib_example(
 )
 
 build_lib_example(
-        NAME defiance-handover
+        NAME defiance-handover-example
         SOURCE_FILES
-                handover/handover-scenario.cc
-                handover/handover-action-application.cc
-                handover/handover-agent-application.cc
-                handover/handover-observation-application.cc
-                handover/handover-reward-application.cc
+                handover-example/handover-action-application.cc
+                handover-example/handover-agent-application.cc
+                handover-example/handover-observation-application.cc
+                handover-example/handover-reward-application.cc
+                handover-example/simulation.cc
+                handover-example/simulation-setup.cc
         HEADER_FILES
-                handover/handover-action-application.h
-                handover/handover-agent-application.h
-                handover/handover-observation-application.h
-                handover/handover-reward-application.h
+                handover-example/handover-action-application.h
+                handover-example/handover-agent-application.h
+                handover-example/handover-observation-application.h
+                handover-example/handover-reward-application.h
         LIBRARIES_TO_LINK
                 ${libapplications}
                 ${liblte}

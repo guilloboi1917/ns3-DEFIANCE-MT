@@ -13,15 +13,16 @@
 #include "position-observation-app.h"
 #include "position-reward-app.h"
 #include "position-agent-app.h"
+#include "position-action-app.h"
 
 using namespace ns3;
 
-NS_LOG_COMPONENT_DEFINE("ApplicationCommunicationExample");
+NS_LOG_COMPONENT_DEFINE("AppCommunicationExample");
 
 int
 main(int argc, char* argv[])
 {
-    LogComponentEnable("ApplicationCommunicationExample", LOG_LEVEL_INFO);
+    LogComponentEnable("AppCommunicationExample", LOG_LEVEL_INFO);
     LogComponentEnable("PositionAgentApp", LOG_LEVEL_INFO);
 
     uint32_t seed = 1;
@@ -48,6 +49,8 @@ main(int argc, char* argv[])
     auto agentNode = CreateObject<Node>();
     NodeContainer rewardNodes;
     rewardNodes.Create(1);
+    NodeContainer actionNodes;
+    actionNodes.Create(1);
 
     MobilityHelper mobility;
     mobility.SetPositionAllocator("ns3::RandomDiscPositionAllocator",
@@ -78,6 +81,10 @@ main(int argc, char* argv[])
     helper.SetTypeId("ns3::PositionRewardApp");
     RlApplicationContainer rewardApps = helper.Install(rewardNodes);
 
+    // Create and install action app
+    helper.SetTypeId("ns3::PositionActionApp");
+    RlApplicationContainer actionApps = helper.Install(actionNodes);
+
     // Create and install agent app
     auto agentApp = CreateObjectWithAttributes<PositionAgentApp>(
                                                           "MaxRewardHistoryLength",
@@ -89,6 +96,7 @@ main(int argc, char* argv[])
     commHelper.SetObservationApps(observationApps);
     commHelper.SetAgentApps(RlApplicationContainer(agentApp));
     commHelper.SetRewardApps(rewardApps);
+    commHelper.SetActionApps(actionApps);
     commHelper.SetIds();
 
     // Install the internet on the first observation node and the agent node
@@ -112,7 +120,9 @@ main(int argc, char* argv[])
             // Connect the second observation app and the agent app via a simple channel interface
           {observationApps.GetId(1), agentApp->GetId(), {}},
           // Connect the reward app and the agent app via a simple channel interface
-         {rewardApps.GetId(0), agentApp->GetId(), {}}
+         {rewardApps.GetId(0), agentApp->GetId(), {}},
+         // Connect the agent app and the action app via a simple channel interface
+         {agentApp->GetId(), actionApps.GetId(0), {}}
         }
     );
 

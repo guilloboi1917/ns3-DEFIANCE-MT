@@ -1,6 +1,8 @@
 #include "position-agent-app.h"
 
 #include "ns3/agent-application.h"
+#include "ns3/base-test.h"
+#include <string>
 
 namespace ns3
 { 
@@ -33,6 +35,20 @@ PositionAgentApp::OnRecvObs(uint remoteAppId)
         "\t Last velocity: " << m_obsDataStruct.GetNewestByID(remoteAppId)->data->Get("velocity")->GetObject<OpenGymBoxContainer<double>>()->GetValue(0));
     NS_LOG_INFO(
         "\t Average of 5 last velocities: " << m_obsDataStruct.AggregateNewest(remoteAppId, 5)["velocity"].GetAvg());
+
+    // Send last positions of both observation apps to action app
+    auto dictContainer = CreateObject<OpenGymDictContainer>();
+    for (int observationAppId = 0; observationAppId < 2; observationAppId++) {
+        Ptr<OpenGymBoxContainer<float>> positionBox;
+        if (m_obsDataStruct.HistoryExists(observationAppId)){
+            positionBox = m_obsDataStruct.GetNewestByID(observationAppId)->data->Get("position")->GetObject<OpenGymBoxContainer<float>>();
+        }
+        else {
+            positionBox = MakeBoxContainer<float>(2, 0, 0);
+        }
+        dictContainer->Add("position-"+std::to_string(observationAppId), positionBox);
+    }
+    SendAction(dictContainer);
 }
 
 void 

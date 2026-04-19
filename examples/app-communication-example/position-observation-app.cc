@@ -1,6 +1,7 @@
 #include "position-observation-app.h"
 
 #include "ns3/base-test.h"
+#include "ns3/mobility-model.h"
 
 namespace ns3
 {
@@ -20,12 +21,8 @@ PositionObservationApp::GetTypeId()
 Ptr<OpenGymDictContainer>
 PositionObservationApp::CreateDictContainer(Vector position, double velocity)
 {
-    auto positionBox = MakeBoxContainer<float>(3);
-    positionBox->AddValue(position.x);
-    positionBox->AddValue(position.y);
-
     auto dictContainer = CreateObject<OpenGymDictContainer>();
-    dictContainer->Add("position", positionBox);
+    dictContainer->Add("position", MakeBoxContainer<float>(2, position.x, position.y));
     dictContainer->Add("velocity", MakeBoxContainer<double>(1, velocity));
     return dictContainer;
 }
