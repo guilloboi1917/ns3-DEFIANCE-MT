@@ -16,8 +16,8 @@ build_lib_example(
 )
 
 build_lib_example(
-        NAME defiance-agent-agent-communication
-        SOURCE_FILES agent-agent-communication/agent-agent-communication.cc
+        NAME defiance-agent-communication-example
+        SOURCE_FILES agent-communication-example/agent-communication-example.cc
         LIBRARIES_TO_LINK
                 ${libdefiance}
                 ${libmobility}
@@ -25,7 +25,7 @@ build_lib_example(
 
 build_lib_example(
         NAME defiance-observation-sharing
-        SOURCE_FILES agent-agent-communication/observation-sharing.cc
+        SOURCE_FILES agent-communication-example/observation-sharing.cc
         LIBRARIES_TO_LINK
                 ${libdefiance}
                 ${libmobility}

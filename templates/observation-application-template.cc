@@ -24,8 +24,8 @@ class TemplateObservationApplication : public ObservationApplication
 
         if (IsRunning())
         { // Usually, observations shall only be processed if the application is running
-            // NS_LOG_INFO("Received observation");
-            // Send(observation, 0);
+          // NS_LOG_INFO("Received observation");
+          // Send(observation, 0);
         }
     }
 

@@ -23,9 +23,9 @@ class TemplateRewardApplication : public RewardApplication
 
         if (IsRunning())
         { // Usually, observations shall only be processed if the application is running
-            // NS_LOG_INFO("Received observation");
-            // auto reward = Ptr<OpenGymDictContainer>();
-            // Send(reward, 0);
+          // NS_LOG_INFO("Received observation");
+          // auto reward = Ptr<OpenGymDictContainer>();
+          // Send(reward, 0);
         }
     }
 
