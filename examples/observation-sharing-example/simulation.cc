@@ -24,7 +24,7 @@ main(int argc, char* argv[])
 {
     // Enable this for more detailed logging
     // LogComponentEnable("AgentApplication", LOG_LEVEL_FUNCTION);
-    LogComponentEnable("ObservationSharingExample", LOG_LEVEL_FUNCTION);
+    LogComponentEnable("ObservationSharingExample", LOG_LEVEL_INFO);
 
     uint32_t seed = 1;
     uint32_t runId = 0;
@@ -69,7 +69,7 @@ main(int argc, char* argv[])
                               StringValue("0|200|0|200"));
     mobility.InstallAll();
 
-    // create interfaces
+    // Create and connect channel interfaces
     auto channelInterfaceO_A = CreateObject<SimpleChannelInterface>();
     auto channelInterfaceA_O = CreateObject<SimpleChannelInterface>();
     auto channelInterface0_1 = CreateObject<SimpleChannelInterface>();
@@ -78,7 +78,7 @@ main(int argc, char* argv[])
     channelInterfaceO_A->Connect(channelInterfaceA_O);
     channelInterface0_1->Connect(channelInterface1_0);
 
-    // add interfaces
+    // Add channel interfaces to apps
     observationApp->AddAgentInterface(0, channelInterfaceO_A);
     observationApp->Setup();
     auto interfaceId0 = agent0->AddObservationInterface(0, channelInterfaceA_O);
@@ -91,17 +91,10 @@ main(int argc, char* argv[])
     agent1->SetId(RlApplicationId{AGENT, 1});
     agent1->Setup();
 
-    // add applications to nodes
+    // Add applications to nodes
     nodes.Get(0)->AddApplication(observationApp);
     nodes.Get(1)->AddApplication(agent0);
     nodes.Get(2)->AddApplication(agent1);
-
-    observationApp->SetStartTime(Seconds(0));
-    observationApp->SetStopTime(Seconds(10));
-    agent0->SetStartTime(Seconds(0));
-    agent0->SetStopTime(Seconds(10));
-    agent1->SetStartTime(Seconds(0));
-    agent1->SetStopTime(Seconds(10));
 
     Simulator::Stop(Seconds(10));
     Simulator::Run();
