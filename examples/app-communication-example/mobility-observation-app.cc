@@ -1,24 +1,24 @@
-#include "position-observation-app.h"
+#include "mobility-observation-app.h"
 
 #include "ns3/base-test.h"
 #include "ns3/mobility-model.h"
 
 namespace ns3
 {
-NS_LOG_COMPONENT_DEFINE("PositionObservationApp");
+NS_LOG_COMPONENT_DEFINE("MobilityObservationApp");
 
 TypeId
-PositionObservationApp::GetTypeId()
+MobilityObservationApp::GetTypeId()
 {
-    static TypeId tid = TypeId("ns3::PositionObservationApp")
+    static TypeId tid = TypeId("ns3::MobilityObservationApp")
                             .SetParent<ObservationApplication>()
                             .SetGroupName("defiance")
-                            .AddConstructor<PositionObservationApp>();
+                            .AddConstructor<MobilityObservationApp>();
     return tid;
 }
 
 Ptr<OpenGymDictContainer>
-PositionObservationApp::CreateDictContainer(Vector position, double velocity)
+MobilityObservationApp::CreateDictContainer(Vector position, double velocity)
 {
     auto dictContainer = CreateObject<OpenGymDictContainer>();
     dictContainer->Add("position", MakeBoxContainer<float>(2, position.x, position.y));
@@ -27,7 +27,7 @@ PositionObservationApp::CreateDictContainer(Vector position, double velocity)
 }
 
 void
-PositionObservationApp::Observe(Ptr<const MobilityModel> observation)
+MobilityObservationApp::Observe(Ptr<const MobilityModel> observation)
 {
     if (IsRunning())
     {
@@ -41,13 +41,18 @@ PositionObservationApp::Observe(Ptr<const MobilityModel> observation)
 }
 
 void
-PositionObservationApp::RegisterCallbacks()
+MobilityObservationApp::RegisterCallbacks()
 {
     NS_LOG_FUNCTION(this);
-    Config::ConnectWithoutContext("/NodeList/" + std::to_string(GetNode()->GetId()) +
-                                      "/$ns3::MobilityModel/CourseChange",
-                                  MakeCallback(&PositionObservationApp::Observe, this));
+    // If the app is not yet installed on a node, it observes the course changes of all nodes
+    std::string nodeId = "*";
+    if (GetNode())
+    {
+        nodeId = std::to_string(GetNode()->GetId());
+    }
+    Config::ConnectWithoutContext("/NodeList/" + nodeId + "/$ns3::MobilityModel/CourseChange",
+                                  MakeCallback(&MobilityObservationApp::Observe, this));
 }
 
-NS_OBJECT_ENSURE_REGISTERED(PositionObservationApp);
+NS_OBJECT_ENSURE_REGISTERED(MobilityObservationApp);
 } // namespace ns3

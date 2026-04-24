@@ -24,8 +24,14 @@ build_lib_example(
 )
 
 build_lib_example(
-        NAME defiance-observation-sharing
-        SOURCE_FILES agent-communication-example/observation-sharing.cc
+        NAME defiance-observation-sharing-example
+        SOURCE_FILES
+                observation-sharing-example/position-observation-app.cc
+                observation-sharing-example/observation-sharing-agent-app.cc
+                observation-sharing-example/simulation.cc
+        HEADER_FILES
+                observation-sharing-example/position-observation-app.h
+                observation-sharing-example/observation-sharing-agent-app.h
         LIBRARIES_TO_LINK
                 ${libdefiance}
                 ${libmobility}
@@ -43,8 +49,8 @@ build_lib_example(
         SOURCE_FILES
                 app-communication-example/simulation.cc
                 app-communication-example/position-reward-app.cc
-                app-communication-example/position-observation-app.cc
-                app-communication-example/position-agent-app.cc
+                app-communication-example/mobility-observation-app.cc
+                app-communication-example/mobility-agent-app.cc
                 app-communication-example/position-action-app.cc
         HEADER_FILES
                 app-communication-example/position-observation-app.h

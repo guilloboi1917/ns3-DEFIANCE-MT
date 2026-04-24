@@ -1,4 +1,3 @@
-#include "ns3/ai-module.h"
 #include "ns3/core-module.h"
 #include "ns3/defiance-module.h"
 
@@ -52,6 +51,9 @@ class LoggingAgentApp : public AgentApplication
         return {};
     }
 };
+
+NS_OBJECT_ENSURE_REGISTERED(LoggingAgentApp);
+
 } // namespace ns3
 
 // Run this example with 'ns3 run defiance-agent-agent-communication'
@@ -75,8 +77,10 @@ main(int argc, char* argv[])
     channelInterface0_1->Connect(channelInterface1_0);
 
     agent0->AddAgentInterface(1, channelInterface0_1);
+    agent0->SetId(RlApplicationId{AGENT, 0});
     agent0->Setup();
     agent1->AddAgentInterface(0, channelInterface1_0);
+    agent1->SetId(RlApplicationId{AGENT, 1});
     agent1->Setup();
 
     nodes.Get(0)->AddApplication(agent0);

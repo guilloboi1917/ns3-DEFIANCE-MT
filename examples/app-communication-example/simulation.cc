@@ -1,6 +1,6 @@
+#include "mobility-agent-app.h"
+#include "mobility-observation-app.h"
 #include "position-action-app.h"
-#include "position-agent-app.h"
-#include "position-observation-app.h"
 #include "position-reward-app.h"
 
 #include "ns3/base-test.h"
@@ -23,7 +23,7 @@ int
 main(int argc, char* argv[])
 {
     LogComponentEnable("AppCommunicationExample", LOG_LEVEL_INFO);
-    LogComponentEnable("PositionAgentApp", LOG_LEVEL_INFO);
+    LogComponentEnable("MobilityAgentApp", LOG_LEVEL_INFO);
 
     uint32_t seed = 1;
     uint32_t runId = 0;
@@ -72,7 +72,7 @@ main(int argc, char* argv[])
     mobility.InstallAll();
 
     // Create and install observation apps
-    RlApplicationHelper helper(TypeId::LookupByName("ns3::PositionObservationApp"));
+    RlApplicationHelper helper(TypeId::LookupByName("ns3::MobilityObservationApp"));
     helper.SetAttribute("StartTime", TimeValue(Seconds(0)));
     helper.SetAttribute("StopTime", TimeValue(Seconds(10)));
     RlApplicationContainer observationApps = helper.Install(observationNodes);
@@ -87,7 +87,7 @@ main(int argc, char* argv[])
 
     // Create and install agent app
     auto agentApp =
-        CreateObjectWithAttributes<PositionAgentApp>("MaxRewardHistoryLength", UintegerValue(5));
+        CreateObjectWithAttributes<MobilityAgentApp>("MaxRewardHistoryLength", UintegerValue(5));
     agentNode->AddApplication(agentApp);
 
     // Create a CommunicationHelper and use it to assign IDs to the apps

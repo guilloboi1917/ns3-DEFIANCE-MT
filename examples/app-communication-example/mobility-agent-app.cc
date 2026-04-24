@@ -1,4 +1,4 @@
-#include "position-agent-app.h"
+#include "mobility-agent-app.h"
 
 #include "ns3/agent-application.h"
 #include "ns3/base-test.h"
@@ -7,20 +7,20 @@
 
 namespace ns3
 {
-NS_LOG_COMPONENT_DEFINE("PositionAgentApp");
+NS_LOG_COMPONENT_DEFINE("MobilityAgentApp");
 
 TypeId
-PositionAgentApp::GetTypeId()
+MobilityAgentApp::GetTypeId()
 {
-    static TypeId tid = TypeId("ns3::PositionAgentApp")
+    static TypeId tid = TypeId("ns3::MobilityAgentApp")
                             .SetParent<AgentApplication>()
                             .SetGroupName("defiance")
-                            .AddConstructor<PositionAgentApp>();
+                            .AddConstructor<MobilityAgentApp>();
     return tid;
 }
 
 void
-PositionAgentApp::OnRecvObs(uint remoteAppId)
+MobilityAgentApp::OnRecvObs(uint remoteAppId)
 {
     NS_LOG_INFO("Received observation from observation interface " << remoteAppId << ":");
     auto lastPosition = m_obsDataStruct.GetNewestByID(remoteAppId)
@@ -62,7 +62,7 @@ PositionAgentApp::OnRecvObs(uint remoteAppId)
 }
 
 void
-PositionAgentApp::OnRecvReward(uint remoteAppId)
+MobilityAgentApp::OnRecvReward(uint remoteAppId)
 {
     NS_LOG_INFO("Received reward from reward interface " << remoteAppId << ":");
     NS_LOG_INFO("\t Last distance: "
@@ -70,16 +70,16 @@ PositionAgentApp::OnRecvReward(uint remoteAppId)
 }
 
 Ptr<OpenGymSpace>
-PositionAgentApp::GetObservationSpace()
+MobilityAgentApp::GetObservationSpace()
 {
     return {};
 }
 
 Ptr<OpenGymSpace>
-PositionAgentApp::GetActionSpace()
+MobilityAgentApp::GetActionSpace()
 {
     return {};
 }
 
-NS_OBJECT_ENSURE_REGISTERED(PositionAgentApp);
+NS_OBJECT_ENSURE_REGISTERED(MobilityAgentApp);
 } // namespace ns3

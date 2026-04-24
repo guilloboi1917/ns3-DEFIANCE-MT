@@ -10,16 +10,16 @@ namespace ns3
 /**
  * @ingroup defiance
  * Observation application that registers to a callback to observe
- * the current position of the node it is installed on. This position is
+ * the current position and velocity of the node it is installed on. These values are
  * packed into a DictContainer and sent to all registered agent applications.
  */
 class PositionObservationApp : public ObservationApplication
 {
   public:
     PositionObservationApp() {};
-    ~PositionObservationApp() override {};
+    ~PositionObservationApp() override = default;
+
     static TypeId GetTypeId();
-    Ptr<OpenGymDictContainer> CreateDictContainer(Vector position, double velocity);
     void Observe(Ptr<const MobilityModel> observation);
     void RegisterCallbacks() override;
 };
