@@ -56,12 +56,13 @@ NS_OBJECT_ENSURE_REGISTERED(LoggingAgentApp);
 
 } // namespace ns3
 
+using namespace ns3;
+
 // Run this example with 'ns3 run defiance-agent-agent-communication'
 
 int
 main(int argc, char* argv[])
 {
-    using namespace ns3;
     LogComponentEnable("AgentApplication", LOG_LEVEL_FUNCTION);
     LogComponentEnable("AgentCommunicationExample", LOG_LEVEL_FUNCTION);
 

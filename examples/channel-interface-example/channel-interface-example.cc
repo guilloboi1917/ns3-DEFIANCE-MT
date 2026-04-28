@@ -18,7 +18,7 @@ CreateTestMessage(float value)
     Ptr<OpenGymDictContainer> msg = CreateObject<OpenGymDictContainer>();
     Ptr<OpenGymBoxContainer<float>> box = CreateObject<OpenGymBoxContainer<float>>();
     box->AddValue(value);
-    msg->Add("box", box);
+    msg->Add("msg", box);
     return msg;
 }
 
@@ -69,7 +69,7 @@ main(int argc, char* argv[])
 
     // add the receive callback to the channel interfaces
     auto recvCallback = Callback<void, Ptr<OpenGymDictContainer>>(
-        [](Ptr<OpenGymDictContainer> msg) { NS_LOG_INFO(msg->Get("box")); });
+        [](Ptr<OpenGymDictContainer> msg) { NS_LOG_INFO(msg->Get("msg")); });
 
     interfaceSimple0->AddRecvCallback(recvCallback);
     interfaceSimple1->AddRecvCallback(recvCallback);
