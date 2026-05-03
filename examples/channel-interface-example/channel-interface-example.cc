@@ -167,7 +167,7 @@ main(int argc, char* argv[])
                         &SocketChannelInterface::Send,
                         interfaceTcp1_0,
                         CreateTestMessage(9));
-    
+
     // Similarly, we can also still send into the other direction
     Simulator::Schedule(Seconds(3.5),
                         &SocketChannelInterface::Send,
@@ -228,13 +228,13 @@ main(int argc, char* argv[])
 
     // Hence, these messages will not be received
     Simulator::Schedule(Seconds(7.1),
-                    &SocketChannelInterface::Send,
-                    interfaceUdp1_0,
-                    CreateTestMessage(18));
+                        &SocketChannelInterface::Send,
+                        interfaceUdp1_0,
+                        CreateTestMessage(18));
     Simulator::Schedule(Seconds(7.2),
-                    &SimpleChannelInterface::Send,
-                    interfaceSimple0,
-                    CreateTestMessage(19));
+                        &SimpleChannelInterface::Send,
+                        interfaceSimple0,
+                        CreateTestMessage(19));
 
     // Delete channel interfaces
     Simulator::ScheduleDestroy(&SimpleChannelInterface::Dispose, interfaceSimple0);
