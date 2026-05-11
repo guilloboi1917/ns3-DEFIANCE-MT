@@ -60,7 +60,12 @@ HandoverActionApplication::ExecuteAction(uint32_t remoteAppId, Ptr<OpenGymDictCo
     // 1: Is UE ready for a handover?
     auto currentCellId = g_ueLteDevs.Get(0)->GetObject<LteUeNetDevice>()->GetRrc()->GetCellId();
     auto newCellId = DynamicCast<OpenGymBoxContainer<float>>(action->Get("newCellId"))->GetValue(0);
-    NS_LOG_DEBUG("currentCellId: " << currentCellId << "\tnewCellId: " << newCellId);
+
+    // Round NewCellId to the nearest integer, since that's what the actual cell IDs are and cast to
+    // uint32_t
+    uint32_t newCellIdRounded = static_cast<uint32_t>(std::round(newCellId));
+
+    NS_LOG_DEBUG("currentCellId: " << currentCellId << "\n newCellIdRounded: " << newCellIdRounded);
     uint32_t i = 0;
     for (; i < g_enbLteDevs.GetN(); i++)
     {
@@ -83,7 +88,7 @@ HandoverActionApplication::ExecuteAction(uint32_t remoteAppId, Ptr<OpenGymDictCo
     }
 
     // 2: Was no-op action taken?
-    if (newCellId == 0)
+    if (newCellIdRounded == 0)
     { // no-op
         NS_LOG_DEBUG(Simulator::Now().GetSeconds() << "\t2: No-op handover.");
         g_noopHandovers++;
@@ -91,7 +96,7 @@ HandoverActionApplication::ExecuteAction(uint32_t remoteAppId, Ptr<OpenGymDictCo
     }
 
     // 3: Is the requested cell the one that the UE is already connected to?
-    if (newCellId == currentCellId)
+    if (newCellIdRounded == currentCellId)
     { // no-op
         g_sameCellHandovers++;
         return;
@@ -107,11 +112,15 @@ HandoverActionApplication::ExecuteAction(uint32_t remoteAppId, Ptr<OpenGymDictCo
     }
 
     g_totalHandovers++;
+
     // X2-based Handover
     NS_LOG_DEBUG(Simulator::Now().GetSeconds()
                  << "\tAttempting handover for UE " << g_ueLteDevs.Get(0)->GetNode()->GetId()
-                 << ", RNTI " << rnti << "; cell " << currentCellId << " --> " << newCellId);
-    m_lteHelper->HandoverRequest(Seconds(0), g_ueLteDevs.Get(0), g_enbLteDevs.Get(i), newCellId);
+                 << ", RNTI " << rnti << "; cell " << currentCellId << " --> " << newCellIdRounded);
+    m_lteHelper->HandoverRequest(Seconds(0),
+                                 g_ueLteDevs.Get(0),
+                                 g_enbLteDevs.Get(i),
+                                 newCellIdRounded);
 }
 
 void

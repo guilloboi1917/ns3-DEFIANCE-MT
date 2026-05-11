@@ -1,12 +1,20 @@
 """!Agent leveraging ray to train an agent for a certain ns3 environment."""
 
 import logging
+import os
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import ray
+try:
+    import torch
+
+    HAS_GPU = torch.cuda.is_available()
+except ImportError:
+    HAS_GPU = False
 from ns3ai_gym_env.envs.ns3_multi_agent_environment import Ns3MultiAgentEnv
 from ray.air.integrations.wandb import WandbLoggerCallback
 from ray.rllib.algorithms import AlgorithmConfig
@@ -15,6 +23,11 @@ from ray.rllib.policy.policy import Policy
 from ray.tune import Tuner, register_env
 from ray.tune.impl.config import CheckpointConfig, RunConfig
 from ray.tune.registry import get_trainable_cls
+from ray.rllib.utils.metrics import (
+    ENV_RUNNER_RESULTS,
+    EPISODE_RETURN_MEAN,
+)
+
 
 from defiance import NS3_HOME
 from defiance.utils import first
@@ -87,17 +100,85 @@ def create_env(context: Any, env_name: str, ns3_settings: dict[str, Any]) -> Ns3
     )
 
 
+def _build_ppo_config(
+    base_config: AlgorithmConfig,
+    ns3_settings: dict[str, Any],
+    env: Ns3MultiAgentEnv,
+) -> AlgorithmConfig:
+    """Apply PPO-specific training params."""
+    return (
+        base_config.training(
+            use_critic=True,
+            use_gae=True,
+            lambda_=0.95,
+            use_kl_loss=False,
+            kl_coeff=0.2,
+            kl_target=0.01,
+            vf_loss_coeff=0.5,
+            entropy_coeff=0.001,
+            clip_param=0.2,
+            vf_clip_param=10.0,
+            grad_clip=50.0,
+            lr=0.0005,
+            gamma=0.99,
+        )
+    )
+
+
+def _build_dqn_config(
+    base_config: AlgorithmConfig,
+    ns3_settings: dict[str, Any],
+    env: Ns3MultiAgentEnv,
+) -> AlgorithmConfig:
+    """Apply DQN (including Double Dueling) specific training params."""
+    return (
+        base_config.training(
+            lr=0.0005,
+            gamma=0.99,
+            grad_clip=50.0,
+            train_batch_size=2048,
+            target_network_update_freq=1000,
+            replay_buffer_config={
+                "type": "MultiAgentPrioritizedReplayBuffer",
+                "capacity": 50000,
+                "prioritized_replay_alpha": 0.6,
+                "prioritized_replay_beta": 0.4,
+            },
+            num_steps_sampled_before_learning_starts=1000,
+            store_buffer_in_checkpoints=False,
+        )
+        .training(
+            # double_q=True is default in RLlib DQN
+            # dueling=True is default in RLlib DQN
+        )
+    )
+
+
+_BUILDERS = {
+    "PPO": _build_ppo_config,
+    "DQN": _build_dqn_config,
+    "D3QN": _build_dqn_config,  # D3QN = DQN with double_q + dueling (RLlib default)
+}
+
+
 def create_example_training_config(
     env_name: str,
     max_episode_steps: int,
     training_params: dict[str, Any],
     rollout_fragment_length: int,
-    trainable: str = "PPO",
+    trainable: str = "PPO",  # PPO, DQN, or D3QN
     **ns3_settings: Any,
 ) -> AlgorithmConfig:
     """!Create an example algorithm config for use with multiagent training."""
     logger.info("max_episode_steps %s not supported for multi-agent!", max_episode_steps)
-    ns3_settings.pop("visualize", None)
+
+    # Create stats directory with timestamp
+    if ns3_settings.get("visualize"):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        stats_dir = Path(NS3_HOME) / "contrib" / "defiance" / "examples" / "uav-handover" / "stats" / f"{trainable}_{timestamp}"
+        stats_dir.mkdir(parents=True, exist_ok=True)
+        ns3_settings["statsDir"] = str(stats_dir)
+        logger.info("Stats will be saved to: %s", stats_dir)
 
     env = Ns3MultiAgentEnv(targetName=env_name, ns3Path=NS3_HOME, ns3Settings=ns3_settings.copy(), trial_name="init")
     env.close()
@@ -120,8 +201,13 @@ def create_example_training_config(
     def _env_to_module_pipeline(*_args: Any, **_kwargs: Any) -> FlattenObservations:
         return FlattenObservations(multi_agent=True)
 
-    return (
-        get_trainable_cls(trainable)
+    # Map trainable name to RLlib class
+    rllib_trainable = trainable
+    if trainable == "D3QN":
+        rllib_trainable = "DQN"  # D3QN uses RLlib's DQN (which supports double + dueling)
+
+    base_config = (
+        get_trainable_cls(rllib_trainable)
         .get_default_config()
         .environment(env="defiance", env_config={"num_agents": len(env.observation_spaces.keys())})
         .env_runners(
@@ -129,14 +215,27 @@ def create_example_training_config(
             num_env_runners=ns3_settings["parallel"],
             create_env_on_local_worker=False,
             rollout_fragment_length=rollout_fragment_length or "auto",
+            batch_mode="complete_episodes",
             env_to_module_connector=_env_to_module_pipeline,
         )
-        .training(
-            gamma=0.99,
-            lr=0.0003,
+        .learners(
+            num_learners=1,
+            num_gpus_per_learner=1 if HAS_GPU else 0,
         )
         .multi_agent(policies=policies, policy_mapping_fn=policy_mapping_fn)
     )
+
+    # Apply algorithm-specific config
+    builder = _BUILDERS.get(trainable)
+    if builder is None:
+        msg = f"Unknown trainable: {trainable}. Choose from: {list(_BUILDERS.keys())}"
+        raise ValueError(msg)
+
+    config = builder(base_config, ns3_settings, env)
+
+    # Set shared params (properties, not .training() args)
+    config.sgd_minibatch_size = 2048
+    return config
 
 
 def start_training(
@@ -147,8 +246,13 @@ def start_training(
     wandb_logger: WandbLoggerCallback | None = None,
 ) -> None:
     """!Start a ray training session with the given multiagent algorithm config."""
+    # Mitigate OOM: raise memory threshold or disable worker killing
+    os.environ.setdefault("RAY_memory_usage_threshold", "0.99")
+    # Reduce object store memory if needed
+    os.environ.setdefault("RAY_object_store_memory_limit", "2GB")
+
     try:
-        ray.init(num_gpus=0)
+        ray.init(num_gpus=1 if HAS_GPU else 0)
 
         if load_checkpoint_path:
             tuner = Tuner.restore(load_checkpoint_path, trainable, param_space=config.to_dict())
@@ -171,13 +275,35 @@ def start_training(
         result = tuner.fit()
 
         logger.info("Training done!")
+        metric = f"{ENV_RUNNER_RESULTS}/{EPISODE_RETURN_MEAN}"
         (Path(result.experiment_path) / "best_checkpoint").mkdir(exist_ok=True, parents=True)
 
-        res = result.get_best_result(metric="episode_reward_mean", mode="max")
-        res.get_best_checkpoint(metric="episode_reward_mean", mode="max").to_directory(
-            result.experiment_path + "/best_checkpoint"
+        # Determine the best result – fallback if no episode returns
+        best_result = result.get_best_result(metric=metric, mode="max")
+        if best_result is None:
+            logger.warning("No episode returns found – using last checkpoint instead.")
+            best_result = result.get_best_result(metric="training_iteration", mode="max")
+
+        if best_result is None:
+            logger.error("No results at all – cannot save checkpoint.")
+            return
+
+        # Retrieve a checkpoint (try best by metric, then fallback to latest)
+        checkpoint = best_result.get_best_checkpoint(
+            metric=metric, mode="max"
         )
-        logger.info("Best checkpoint saved at: %s", result.experiment_path)
+        if checkpoint is None:
+            # Fallback to the latest checkpoint (property `checkpoint`)
+            checkpoint = best_result.checkpoint
+            logger.info("Using latest checkpoint.")
+
+        if checkpoint is not None:
+            checkpoint_dir = Path(result.experiment_path) / "best_checkpoint"
+            checkpoint_dir.mkdir(exist_ok=True, parents=True)
+            checkpoint.to_directory(str(checkpoint_dir))
+            logger.info("Best checkpoint saved at: %s", checkpoint_dir)
+        else:
+            logger.warning("No checkpoint available – training may not have produced one.")
 
         ray.shutdown()
 
