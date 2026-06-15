@@ -165,6 +165,18 @@ build_lib_example(
 )
 
 build_lib_example(
+        NAME defiance-tcp-harl
+        SOURCE_FILES
+                harl-tcp-prototype/harl-tcp-scenario.cc
+        LIBRARIES_TO_LINK
+                ${libapplications}
+                ${libflow-monitor}
+                ${libinternet}
+                ${liblte}
+                ${libdefiance}
+)
+
+build_lib_example(
         NAME defiance-sumo-test
         SOURCE_FILES sumo-test/sumo-example.cc
         LIBRARIES_TO_LINK
