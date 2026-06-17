@@ -50,7 +50,6 @@ def start_inference(env_name: str, load_checkpoint_path: str | Path, **ns3_setti
         msg = "Checkpoint is not multi-agent"
         raise TypeError(msg)
 
-    ns3_settings["visualize"] = ""
     env = Ns3MultiAgentEnv(targetName=env_name, ns3Path=NS3_HOME, ns3Settings=ns3_settings, trial_name="bootup")
     reset = env.reset()
     agent, observation = first(reset[0].items())
@@ -62,10 +61,28 @@ def start_inference(env_name: str, load_checkpoint_path: str | Path, **ns3_setti
         if "shared_policy" in policies:
             action = policies["shared_policy"].compute_single_action(observation)[0]
         else:
-            flat_obs = {}
+            flat_obs = []
             for key in observation:
-                flat_obs[key] = np.concatenate([observation[key][key2] for key2 in observation[key]])
-            flattened_obs = np.concatenate([flat_obs[key] for key in flat_obs])
+                val = observation[key]
+                if isinstance(val, np.ndarray):
+                    flat_obs.append(val.flatten())
+                elif isinstance(val, (int, float, np.integer, np.floating)):
+                    # RLlib FlattenObservations one-hot encodes Discrete spaces.
+                    # The agent app defines cellId as Discrete(22), rrcState as Discrete(14).
+                    # They come from the env as scalars but must be one-hot for the policy.
+                    if key == "cellId":
+                        one_hot = np.zeros(22, dtype=np.float32)
+                        one_hot[int(val)] = 1.0
+                        flat_obs.append(one_hot)
+                    elif key == "rrcState":
+                        one_hot = np.zeros(14, dtype=np.float32)
+                        one_hot[int(val)] = 1.0
+                        flat_obs.append(one_hot)
+                    else:
+                        flat_obs.append(np.array([val], dtype=np.float32))
+                else:
+                    flat_obs.append(np.atleast_1d(np.array(val, dtype=np.float32)))
+            flattened_obs = np.concatenate(flat_obs).astype(np.float32)
             # this changes based on policy_mapping
             action = policies[agent].compute_single_action(obs=flattened_obs)[0]
         states = env.step({agent: action})
@@ -125,14 +142,17 @@ def _build_ppo_config(
     )
 
 
-def _build_dqn_config(
+def _build_d3qn_config(
     base_config: AlgorithmConfig,
     ns3_settings: dict[str, Any],
     env: Ns3MultiAgentEnv,
 ) -> AlgorithmConfig:
-    """Apply DQN (including Double Dueling) specific training params."""
+    """Apply D3QN (including Double Dueling) specific training params."""
     return (
-        base_config.training(
+        base_config
+        .api_stack(enable_rl_module_and_learner=False, enable_env_runner_and_connector_v2=False)
+        .resources(num_gpus=1 if HAS_GPU else 0)
+        .training(
             lr=0.0005,
             gamma=0.99,
             grad_clip=50.0,
@@ -153,11 +173,42 @@ def _build_dqn_config(
         )
     )
 
+def _build_dqn_config(
+    base_config: AlgorithmConfig,
+    ns3_settings: dict[str, Any],
+    env: Ns3MultiAgentEnv,
+) -> AlgorithmConfig:
+    """Apply DQN (excluding Double Dueling) specific training params."""
+    return (
+        base_config
+        .api_stack(enable_rl_module_and_learner=False, enable_env_runner_and_connector_v2=False)
+        .resources(num_gpus=1 if HAS_GPU else 0)
+        .training(
+            lr=0.0005,
+            gamma=0.99,
+            grad_clip=50.0,
+            train_batch_size=2048,
+            target_network_update_freq=1000,
+            replay_buffer_config={
+                "type": "MultiAgentPrioritizedReplayBuffer",
+                "capacity": 50000,
+                "prioritized_replay_alpha": 0.6,
+                "prioritized_replay_beta": 0.4,
+            },
+            num_steps_sampled_before_learning_starts=1000,
+            store_buffer_in_checkpoints=False,
+        )
+        .training(
+            double_q=False,
+            dueling=False
+        )
+    )
+
 
 _BUILDERS = {
     "PPO": _build_ppo_config,
     "DQN": _build_dqn_config,
-    "D3QN": _build_dqn_config,  # D3QN = DQN with double_q + dueling (RLlib default)
+    "D3QN": _build_d3qn_config,  # D3QN = DQN with double_q + dueling (RLlib default)
 }
 
 
@@ -166,6 +217,7 @@ def create_example_training_config(
     max_episode_steps: int,
     training_params: dict[str, Any],
     rollout_fragment_length: int,
+    sample_timeout_s: float | None = None,
     trainable: str = "PPO",  # PPO, DQN, or D3QN
     **ns3_settings: Any,
 ) -> AlgorithmConfig:
@@ -217,6 +269,7 @@ def create_example_training_config(
             rollout_fragment_length=rollout_fragment_length or "auto",
             batch_mode="complete_episodes",
             env_to_module_connector=_env_to_module_pipeline,
+            **({"sample_timeout_s": sample_timeout_s} if sample_timeout_s is not None else {}),
         )
         .learners(
             num_learners=1,
@@ -251,23 +304,33 @@ def start_training(
     # Reduce object store memory if needed
     os.environ.setdefault("RAY_object_store_memory_limit", "2GB")
 
+    # D3QN is not available as a trainable, we need to specify it as DQN.
+    if trainable == "D3QN":
+        trainable = "DQN"  # D3QN uses RLlib's DQN (which supports double + dueling)
+
     try:
         ray.init(num_gpus=1 if HAS_GPU else 0)
 
+        run_config = RunConfig(
+            stop={"training_iteration": iterations},
+            checkpoint_config=CheckpointConfig(
+                checkpoint_frequency=1,
+                checkpoint_at_end=True,
+            ),
+            callbacks=[wandb_logger] if wandb_logger else [],
+        )
+
         if load_checkpoint_path:
-            tuner = Tuner.restore(load_checkpoint_path, trainable, param_space=config.to_dict())
-            logger.info("Checkpoint restored!")
+            logger.info("Restoring from checkpoint: %s", load_checkpoint_path)
+            tuner = Tuner.restore(
+                load_checkpoint_path,
+                trainable,
+                param_space=config.to_dict(),
+            )
         else:
             tuner = Tuner(
                 trainable,
-                run_config=RunConfig(
-                    stop={"training_iteration": iterations},
-                    checkpoint_config=CheckpointConfig(
-                        checkpoint_frequency=1,
-                        checkpoint_at_end=True,
-                    ),
-                    callbacks=[wandb_logger] if wandb_logger else [],
-                ),
+                run_config=run_config,
                 param_space=config.to_dict(),
             )
 

@@ -99,6 +99,14 @@ arg_parser.add_argument(
     default=None,
     help="The rollout fragment length to be used for training.",
 )
+arg_parser.add_argument(
+    "--sample-timeout",
+    "-st",
+    type=float,
+    default=None,
+    help="Timeout (seconds) for rollout worker samples. Increase if workers "
+    "keep timing out during long episodes (default 30s in RLlib).",
+)
 
 ns = arg_parser.parse_args()
 
@@ -134,6 +142,7 @@ match ns.type:
             ns.max_episode_steps,
             ns.training_params,
             ns.rollout_fragment_length,
+            ns.sample_timeout,
             ns.trainable,
             **ns.ns3_settings,
         )
@@ -143,7 +152,6 @@ match ns.type:
             from ray.air.integrations.wandb import WandbLoggerCallback
 
             wandb_logger = WandbLoggerCallback(project=ns.wandb_project, api_key=ns.wandb_key)
-
         start_training(ns.iterations, config, ns.trainable, ns.checkpoint_path, wandb_logger)
     case "infer":
         from .ray import start_inference
