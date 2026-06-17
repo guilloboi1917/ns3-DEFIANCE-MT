@@ -168,6 +168,15 @@ build_lib_example(
         NAME defiance-tcp-harl
         SOURCE_FILES
                 harl-tcp-prototype/harl-tcp-scenario.cc
+                harl-tcp-prototype/handover/harl-tcp-handover-agent-app.cc
+                harl-tcp-prototype/handover/harl-tcp-handover-obs-app.cc
+                harl-tcp-prototype/handover/harl-tcp-handover-act-app.cc
+                harl-tcp-prototype/handover/harl-tcp-handover-rwd-app.cc
+        HEADER_FILES
+                harl-tcp-prototype/handover/harl-tcp-handover-agent-app.h
+                harl-tcp-prototype/handover/harl-tcp-handover-obs-app.h
+                harl-tcp-prototype/handover/harl-tcp-handover-act-app.h
+                harl-tcp-prototype/handover/harl-tcp-handover-rwd-app.h
         LIBRARIES_TO_LINK
                 ${libapplications}
                 ${libflow-monitor}

@@ -6,6 +6,11 @@
  * 1 aerial UE, 1 remote server. The UE runs a TCP BulkSendApplication to the remote server.
  */
 
+#include "handover/harl-tcp-handover-act-app.h"
+#include "handover/harl-tcp-handover-agent-app.h"
+#include "handover/harl-tcp-handover-obs-app.h"
+#include "handover/harl-tcp-handover-rwd-app.h"
+
 #include "ns3/applications-module.h"
 #include "ns3/channel-condition-model.h"
 #include "ns3/communication-helper.h"
@@ -47,9 +52,18 @@ int16_t g_currentRnti = 1;
 int16_t g_currentCellId = 1;
 
 // Application Connection succeed/fail callbacks
+extern bool g_tcpConnected;
+extern bool g_tcpAlive;
+extern uint64_t g_totalRxBytes;
+extern uint32_t g_totalRetransmissions;
+extern double g_rttSumMs;
+extern uint32_t g_rttSamples;
+
 void
 NotifyConnectionSucceeded(Ptr<Socket> socket, const Address& local, const Address& remote)
 {
+    g_tcpConnected = true;
+    g_tcpAlive = true;
     std::cout << "TCP connection succeeded at time " << Simulator::Now().GetSeconds() << "s"
               << std::endl;
 }
@@ -57,48 +71,69 @@ NotifyConnectionSucceeded(Ptr<Socket> socket, const Address& local, const Addres
 void
 NotifyConnectionFailed(Ptr<Socket> socket, const Address& local, const Address& remote)
 {
+    g_tcpAlive = false;
     std::cout << "TCP connection failed at time " << Simulator::Now().GetSeconds() << "s"
               << std::endl;
+}
+
+void
+NotifyTcpStateChange(const TcpSocket::TcpStates_t oldState,
+                     const TcpSocket::TcpStates_t newState)
+{
+    if (newState == TcpSocket::CLOSED || newState == TcpSocket::LAST_ACK)
+    {
+        g_tcpAlive = false;
+        std::cout << "TCP socket closed (state=" << newState
+                  << ") at time " << Simulator::Now().GetSeconds() << "s" << std::endl;
+    }
 }
 
 // CWND tracing callback — fires on every CWND change (every ACK)
 void
 CwndTracer(uint32_t oldCwnd, uint32_t newCwnd)
 {
-    std::ofstream cwndFile(g_outputDir + "harl-tcp-cwnd.csv",
-                           std::ios_base::app);
+    std::ofstream cwndFile(g_outputDir + "harl-tcp-cwnd.csv", std::ios_base::app);
     cwndFile << Simulator::Now().GetSeconds() << "," << newCwnd << std::endl;
 }
 
 void
 TcpRttChange(Time oldValue, Time newValue)
 {
-    std::ofstream rttFile(g_outputDir + "harl-tcp-rtt.csv",
-                          std::ios_base::app);
-    rttFile << Simulator::Now().GetSeconds() << "," << newValue.GetMilliSeconds() << std::endl;
+    // Skip default/backed-off RTT values before connection is established.
+    // m_lastRtt starts at Seconds(3) and may carry RTO-backed-off values
+    // during handshake (up to 12s+), which would corrupt the average.
+    if (!g_tcpConnected)
+    {
+        return;
+    }
+    double rttMs = newValue.GetMilliSeconds();
+    g_rttSumMs += rttMs;
+    g_rttSamples++;
+    if (g_logging)
+    {
+        std::ofstream rttFile(g_outputDir + "harl-tcp-rtt.csv", std::ios_base::app);
+        rttFile << Simulator::Now().GetSeconds() << "," << rttMs << std::endl;
+    }
 }
 
 void
 BbrPacingGainChange(double oldValue, double newValue)
 {
-    std::ofstream pacingGainFile(g_outputDir + "harl-tcp-pacing-gain.csv",
-                                 std::ios_base::app);
+    std::ofstream pacingGainFile(g_outputDir + "harl-tcp-pacing-gain.csv", std::ios_base::app);
     pacingGainFile << Simulator::Now().GetSeconds() << "," << newValue << std::endl;
 }
 
 void
 BbrCwndGainChange(double oldValue, double newValue)
 {
-    std::ofstream cwndGainFile(g_outputDir + "harl-tcp-cwnd-gain.csv",
-                               std::ios_base::app);
+    std::ofstream cwndGainFile(g_outputDir + "harl-tcp-cwnd-gain.csv", std::ios_base::app);
     cwndGainFile << Simulator::Now().GetSeconds() << "," << newValue << std::endl;
 }
 
 void
 TcpRateSampleChange(const TcpRateOps::TcpRateSample& sample)
 {
-    std::ofstream rateFile(g_outputDir + "harl-tcp-rate.csv",
-                           std::ios_base::app);
+    std::ofstream rateFile(g_outputDir + "harl-tcp-rate.csv", std::ios_base::app);
     rateFile << Simulator::Now().GetSeconds() << "," << sample.m_deliveryRate.GetBitRate()
              << std::endl;
 }
@@ -122,6 +157,17 @@ UavRrcStateChange(std::string context,
               << std::endl;
     g_currentRnti = rnti; // Update the global RNTI for the UAV UE
     g_currentCellId = cellId;
+
+    // Detect RLF: UE drops from CONNECTED_NORMALLY to a non-connected state
+    // (not due to a handover, which transitions through CONNECTED_HANDOVER).
+    if (oldState == LteUeRrc::CONNECTED_NORMALLY &&
+        newState != LteUeRrc::CONNECTED_HANDOVER &&
+        g_tcpConnected)
+    {
+        g_rlfTriggered = true;
+        g_tcpAlive = false;
+        std::cout << "RLF detected at time " << Simulator::Now().GetSeconds() << "s" << std::endl;
+    }
 }
 
 void
@@ -130,9 +176,20 @@ HandoverOk(const uint64_t imsi, const uint16_t cellId, const uint16_t rnti)
     std::cout << "Handover OK for UE " << imsi << ", RNTI " << rnti << " to cell " << cellId
               << " at time " << Simulator::Now().GetSeconds() << "s" << std::endl;
     g_totalHandovers++;
-    std::ofstream hoFile(g_outputDir + "harl-tcp-handovers.csv",
-                         std::ios_base::app);
-    hoFile << Simulator::Now().GetSeconds() << "," << cellId << std::endl;
+    g_handoverInProgress = false;
+    if (g_logging)
+    {
+        std::ofstream hoFile(g_outputDir + "harl-tcp-handovers.csv", std::ios_base::app);
+        hoFile << Simulator::Now().GetSeconds() << "," << cellId << std::endl;
+    }
+}
+
+void
+HandoverError(const uint64_t imsi, const uint16_t cellId, const uint16_t rnti)
+{
+    std::cout << "Handover FAILED for UE " << imsi << ", RNTI " << rnti << " at cell " << cellId
+              << " time " << Simulator::Now().GetSeconds() << "s" << std::endl;
+    g_handoverInProgress = false;
 }
 
 void
@@ -142,8 +199,7 @@ ReportUeMeasurements(uint16_t cellId,
                      double sinr,
                      uint8_t componentCarrierId)
 {
-    std::ofstream rsrpFile(g_outputDir + "rsrp_sinr.csv",
-                           std::ios_base::app);
+    std::ofstream rsrpFile(g_outputDir + "rsrp_sinr.csv", std::ios_base::app);
     double sinrDb = 10 * std::log10(sinr);
     rsrpFile << Simulator::Now().GetSeconds() << "," << (int)cellId << "," << (int)rnti << ","
              << rsrp << "," << sinrDb << std::endl;
@@ -161,8 +217,7 @@ ReportUlSinr(uint16_t cellId, uint16_t rnti, double sinrLinear, uint8_t componen
     {
         return;
     }
-    std::ofstream ulSinrFile(g_outputDir + "ul_sinr.csv",
-                             std::ios_base::app);
+    std::ofstream ulSinrFile(g_outputDir + "ul_sinr.csv", std::ios_base::app);
     double sinrDb = 10 * std::log10(sinrLinear);
     ulSinrFile << Simulator::Now().GetSeconds() << "," << cellId << "," << rnti << "," << sinrDb
                << std::endl;
@@ -171,41 +226,41 @@ ReportUlSinr(uint16_t cellId, uint16_t rnti, double sinrLinear, uint8_t componen
 void
 ReportPhyTransmissionStatParameter(PhyTransmissionStatParameters param)
 {
-    std::ofstream mcsFile(g_outputDir + "mcs.csv",
-                          std::ios_base::app);
+    std::ofstream mcsFile(g_outputDir + "mcs.csv", std::ios_base::app);
     mcsFile << Simulator::Now().GetSeconds() << "," << (int)param.m_mcs << std::endl;
 }
 
 void
 ReportUeTxPower(uint16_t cellId, uint16_t rnti, double powerDbm)
 {
-    std::ofstream txPowerFile(g_outputDir + "ue_tx_power.csv",
-                              std::ios_base::app);
-    txPowerFile << Simulator::Now().GetSeconds() << "," << cellId << "," << rnti << ","
-                << powerDbm << std::endl;
+    std::ofstream txPowerFile(g_outputDir + "ue_tx_power.csv", std::ios_base::app);
+    txPowerFile << Simulator::Now().GetSeconds() << "," << cellId << "," << rnti << "," << powerDbm
+                << std::endl;
 }
 
 void
 MobilityCourseChange(std::string context, Ptr<const MobilityModel> model)
 {
-    std::ofstream mobilityFile(g_outputDir + "mobility.csv",
-                               std::ios_base::app);
+    std::ofstream mobilityFile(g_outputDir + "mobility.csv", std::ios_base::app);
     mobilityFile << Simulator::Now().GetSeconds() << "," << model->GetPosition() << std::endl;
 }
 
 void
 SinkRxPacket(Ptr<const Packet> packet, const Address& address)
 {
-    std::ofstream sinkFile(g_outputDir + "sink-packets.csv",
-                           std::ios_base::app);
-    sinkFile << Simulator::Now().GetSeconds() << "," << packet->GetSize() << std::endl;
+    uint32_t size = packet->GetSize();
+    g_totalRxBytes += size;
+    if (g_logging)
+    {
+        std::ofstream sinkFile(g_outputDir + "sink-packets.csv", std::ios_base::app);
+        sinkFile << Simulator::Now().GetSeconds() << "," << size << std::endl;
+    }
 }
 
 void
 SourceTxPacket(Ptr<const Packet> packet)
 {
-    std::ofstream sourceBulkSenderFile(g_outputDir + "source-packets.csv",
-                                       std::ios_base::app);
+    std::ofstream sourceBulkSenderFile(g_outputDir + "source-packets.csv", std::ios_base::app);
     sourceBulkSenderFile << Simulator::Now().GetSeconds() << "," << packet->GetSize() << std::endl;
 }
 
@@ -216,9 +271,12 @@ SourceRetransmissionPacket(const Ptr<const Packet> packet,
                            const Address& peerAddr,
                            const Ptr<const TcpSocketBase> socket)
 {
-    std::ofstream retransmissionFile(g_outputDir + "retransmissions.csv",
-                                     std::ios_base::app);
-    retransmissionFile << Simulator::Now().GetSeconds() << "," << packet->GetSize() << std::endl;
+    g_totalRetransmissions++;
+    if (g_logging)
+    {
+        std::ofstream retransmissionFile(g_outputDir + "retransmissions.csv", std::ios_base::app);
+        retransmissionFile << Simulator::Now().GetSeconds() << "," << packet->GetSize() << std::endl;
+    }
 }
 
 // ------------------------------------------------------------------------- //
@@ -260,26 +318,35 @@ ComputeEnbBoundingBox(NodeContainer enbNodes, double padding)
 // scenarioSetup
 // ------------------------------------------------------------------------- //
 inline void
-scenarioSetup(
-    double ueSpeed = 20.0,            // m/s
-    double simDuration = 50.0,        // seconds
-    double intersiteDistance = 500.0, // m
-    double enbDowntilt = 10.0,        // degrees
-    uint32_t seed = 0,                // Seed for RNG
-    uint32_t runId = 0,
-    std::string trialName = "1",
-    std::string tcpVariant = "TcpBbr",
-    std::string uavMobility = "helix",
-    std::string topology = "simple",
-    double startHeight = 150.0,
-    double endHeight = 300.0,
-    double helixRadius = 80.0,
-    uint32_t bbrWindowLength = 10,
-    uint32_t addStaticUes = 0,
-    bool fullBufferInterference = false,
-    double aerialUeRatio = 0.0,
-    bool logging = true
-)
+scenarioSetup(double ueSpeed = 20.0,            // m/s
+              double simDuration = 50.0,        // seconds
+              double intersiteDistance = 500.0, // m
+              double enbDowntilt = 10.0,        // degrees
+              uint32_t seed = 0,                // Seed for RNG
+              uint32_t runId = 0,
+              std::string trialName = "1",
+              std::string tcpVariant = "TcpBbr",
+              std::string uavMobility = "random-mobility",
+              std::string topology = "hexgrid",
+              double startHeight = 80.0,
+              double endHeight = 300.0,
+              double helixRadius = 80.0,
+              uint32_t bbrWindowLength = 10,
+              uint32_t addStaticUes = 0,
+              bool fullBufferInterference = false,
+              double aerialUeRatio = 0.0,
+              bool logging = true,
+              bool rlMode = false,
+              std::string handoverAlgorithm = "a3",
+              uint32_t stepTime = 100,
+              uint32_t delay = 0,
+              double handoverPenalty = 0.1,
+              double referenceRateBps = 50000000.0,
+              double rttPenaltyWeight = 0.2,
+              double minRttMs = 30.0,
+              double tcpFailurePenalty = 5.0,
+              double rlfPenalty = 10.0,
+              double handoverMargin = 3.0)
 {
     g_outputDir = pathToNs3 + "/contrib/defiance/examples/harl-tcp-prototype/output/";
 
@@ -313,8 +380,26 @@ scenarioSetup(
     auto lteHelper = g_lteHelper;
     auto epcHelper = g_epcHelper;
     lteHelper->SetSchedulerType("ns3::PfFfMacScheduler");
-    lteHelper->SetHandoverAlgorithmType(
-        "ns3::A3RsrpHandoverAlgorithm");
+
+    // --- Handover algorithm ---
+    if (handoverAlgorithm == "agent" || rlMode)
+    {
+        // RL controls handover; disable automatic handover
+        lteHelper->SetHandoverAlgorithmType("ns3::NoOpHandoverAlgorithm");
+    }
+    else if (handoverAlgorithm == "a3")
+    {
+        lteHelper->SetHandoverAlgorithmType("ns3::A3RsrpHandoverAlgorithm");
+    }
+    else if (handoverAlgorithm == "noop")
+    {
+        lteHelper->SetHandoverAlgorithmType("ns3::NoOpHandoverAlgorithm");
+    }
+    else
+    {
+        NS_FATAL_ERROR("Unknown handover algorithm: " << handoverAlgorithm
+                                                      << ". Use a3, noop, or agent.");
+    }
     lteHelper->SetEnbAntennaModelType("ns3::ThreeGppAntennaModelOriented");
     lteHelper->SetUeAntennaModelType("ns3::IsotropicAntennaModel");
     // Add downtilt
@@ -363,9 +448,7 @@ scenarioSetup(
         "ns3::LteUePhy::NoiseFigure",
         DoubleValue(11.0)); // Noise figure in dB, increased to simulate external interference
     Config::SetDefault("ns3::LteEnbRrc::SrsPeriodicity", UintegerValue(80));
-    Config::SetDefault(
-        "ns3::LteHelper::UsePdschForCqiGeneration",
-        BooleanValue(false));
+    Config::SetDefault("ns3::LteHelper::UsePdschForCqiGeneration", BooleanValue(false));
 
     // 3GPP TR 36.777 UMa-AV (Urban Macro - Aerial Vehicle)
     lteHelper->SetPathlossModelType(ThreeGppUmaAvPropagationLossModel::GetTypeId());
@@ -385,18 +468,14 @@ scenarioSetup(
     // Set the EARFCN (frequency band) and Bandwidth (in RBs)
     lteHelper->SetEnbDeviceAttribute("DlEarfcn", UintegerValue(3100));
     lteHelper->SetEnbDeviceAttribute("UlEarfcn", UintegerValue(21100));
-    lteHelper->SetEnbDeviceAttribute(
-        "DlBandwidth",
-        UintegerValue(100)); // Set DL bandwidth to 100 RBs
-    lteHelper->SetEnbDeviceAttribute(
-        "UlBandwidth",
-        UintegerValue(100)); // Set UL bandwidth to 100 RBs
+    lteHelper->SetEnbDeviceAttribute("DlBandwidth",
+                                     UintegerValue(100)); // Set DL bandwidth to 100 RBs
+    lteHelper->SetEnbDeviceAttribute("UlBandwidth",
+                                     UintegerValue(100)); // Set UL bandwidth to 100 RBs
 
     // Set the RLC UM and AM buffer size to match the BDP with headroom ~10% - 100% BDP
     Config::SetDefault("ns3::LteRlcUm::MaxTxBufferSize", UintegerValue(180000));
     Config::SetDefault("ns3::LteRlcAm::MaxTxBufferSize", UintegerValue(180000));
-
-    std::cout << "Setting TCP variant to " << tcpVariant << std::endl;
 
     if (tcpVariant == "TcpNewReno")
     {
@@ -457,8 +536,6 @@ scenarioSetup(
     // ---- eNB setup: simple vs hexgrid ---------------------------------- //
     if (topology == "hexgrid")
     {
-        std::cout << "Using hexgrid topology" << std::endl;
-
         uint32_t numMacroCells = 7;
         uint32_t nMacroEnbSitesX = 2;
         g_enbContainer.Create(3 * numMacroCells);
@@ -516,18 +593,19 @@ scenarioSetup(
 
                 double segLen = CalculateDistance(pos, prev);
                 double newCum = cumDist + segLen;
-                double time = (newCum > totalTravelDist) ? simDuration : dwellTime + newCum / ueSpeed;
+                double time =
+                    (newCum > totalTravelDist) ? simDuration : dwellTime + newCum / ueSpeed;
 
                 wpMob->AddWaypoint(Waypoint(Seconds(time), pos));
                 cumDist = newCum;
                 prev = pos;
             }
 
-            std::cout << "Helix path: X=[" << midX - halfSpanX << ", " << midX + halfSpanX
-                      << "], Y ~" << uavCenterY << " +/-" << helixRadius << ", Z=[" << startZ
-                      << ", " << endZ << "]"
-                      << ", speed=" << ueSpeed << " m/s, travelDist=" << totalTravelDist
-                      << " m, arc=" << cumDist << " m" << std::endl;
+            // std::cout << "Helix path: X=[" << midX - halfSpanX << ", " << midX + halfSpanX
+            //           << "], Y ~" << uavCenterY << " +/-" << helixRadius << ", Z=[" << startZ
+            //           << ", " << endZ << "]"
+            //           << ", speed=" << ueSpeed << " m/s, travelDist=" << totalTravelDist
+            //           << " m, arc=" << cumDist << " m" << std::endl;
         }
         else if (uavMobility == "random-waypoint")
         {
@@ -568,10 +646,9 @@ scenarioSetup(
                 currentPos = nextPos;
             }
 
-            std::cout << "Random waypoint path: bounding box X=[" << bbox.minX << ", "
-                      << bbox.maxX << "], Y=[" << bbox.minY << ", " << bbox.maxY << "], Z=["
-                      << startHeight << ", " << endHeight << "], speed=" << ueSpeed << " m/s"
-                      << std::endl;
+            // std::cout << "Random waypoint path: bounding box X=[" << bbox.minX << ", " << bbox.maxX
+            //           << "], Y=[" << bbox.minY << ", " << bbox.maxY << "], Z=[" << startHeight
+            //           << ", " << endHeight << "], speed=" << ueSpeed << " m/s" << std::endl;
         }
         else // "constant"
         {
@@ -585,8 +662,6 @@ scenarioSetup(
     }
     else // "simple"
     {
-        std::cout << "Using simple topology (2 eNBs on a line)" << std::endl;
-
         g_enbContainer.Create(2);
 
         MobilityHelper mobility;
@@ -659,10 +734,9 @@ scenarioSetup(
                 currentPos = nextPos;
             }
 
-            std::cout << "Random waypoint path: bounding box X=[" << bbox.minX << ", "
-                      << bbox.maxX << "], Y=[" << bbox.minY << ", " << bbox.maxY << "], Z=["
-                      << startHeight << ", " << endHeight << "], speed=" << ueSpeed << " m/s"
-                      << std::endl;
+            std::cout << "Random waypoint path: bounding box X=[" << bbox.minX << ", " << bbox.maxX
+                      << "], Y=[" << bbox.minY << ", " << bbox.maxY << "], Z=[" << startHeight
+                      << ", " << endHeight << "], speed=" << ueSpeed << " m/s" << std::endl;
         }
         else // "constant"
         {
@@ -736,9 +810,9 @@ scenarioSetup(
 
         Ptr<UniformRandomVariable> intUeHeightRng = CreateObject<UniformRandomVariable>();
 
-        std::cout << "Creating " << numEnbs
-                  << " interfering UEs (one per eNB, aerialRatio=" << aerialUeRatio
-                  << ", aerial height in [50, 300] m)" << std::endl;
+        // std::cout << "Creating " << numEnbs
+        //           << " interfering UEs (one per eNB, aerialRatio=" << aerialUeRatio
+        //           << ", aerial height in [50, 300] m)" << std::endl;
         for (uint32_t i = 0; i < numEnbs; ++i)
         {
             Ptr<LteEnbNetDevice> enbDev = g_enbLteDevs.Get(i)->GetObject<LteEnbNetDevice>();
@@ -756,10 +830,6 @@ scenarioSetup(
             Vector uePos = enbPos + (100.0 * dir);
             uePos.z = ueHeight;
             g_interferingUeContainer.Get(i)->GetObject<MobilityModel>()->SetPosition(uePos);
-
-            std::cout << "  Interfering UE " << i << ": eNB " << i << " ori=" << orientation
-                      << " deg, UE at (" << uePos.x << ", " << uePos.y << ", " << ueHeight
-                      << ")" << std::endl;
         }
 
         g_interferingUeLteDevs = lteHelper->InstallUeDevice(g_interferingUeContainer);
@@ -779,8 +849,7 @@ scenarioSetup(
             uint16_t port = intPort + i;
 
             Ipv4Address intRemoteAddr = intRemoteInterfaces.GetAddress(1);
-            OnOffHelper ulTraffic("ns3::TcpSocketFactory",
-                                  InetSocketAddress(intRemoteAddr, port));
+            OnOffHelper ulTraffic("ns3::TcpSocketFactory", InetSocketAddress(intRemoteAddr, port));
             ulTraffic.SetAttribute("DataRate", DataRateValue(DataRate("100Kbps")));
             ulTraffic.SetAttribute("PacketSize", UintegerValue(512));
             ulTraffic.SetAttribute("OnTime",
@@ -796,25 +865,19 @@ scenarioSetup(
             ulSinkApp.Start(Seconds(1.0 + i * 0.1));
 
             Vector pos = g_enbContainer.Get(i)->GetObject<MobilityModel>()->GetPosition();
-            std::cout << "  Interfering UE " << i << " attached to eNB " << i << " at (" << pos.x
-                      << ", " << pos.y << ")" << std::endl;
+            // std::cout << "  Interfering UE " << i << " attached to eNB " << i << " at (" << pos.x
+            //           << ", " << pos.y << ")" << std::endl;
         }
     }
 
     // ---- Static UEs (background TCP UL traffic) ------------------------ //
     if (addStaticUes > 0)
     {
-        double centerX = 0.0;
-        double centerY = 0.0;
-        for (uint32_t i = 0; i < g_enbContainer.GetN(); ++i)
-        {
-            Vector pos = g_enbContainer.Get(i)->GetObject<MobilityModel>()->GetPosition();
-            centerX += pos.x;
-            centerY += pos.y;
-        }
-        centerX /= g_enbContainer.GetN();
-        centerY /= g_enbContainer.GetN();
-        double circleRadius = intersiteDistance * 0.4;
+        // Compute bounding box of eNB positions with padding
+        BoundingBox bbox = ComputeEnbBoundingBox(g_enbContainer, intersiteDistance * 0.15);
+        Ptr<UniformRandomVariable> staticUePosRng = CreateObject<UniformRandomVariable>();
+        staticUePosRng->SetAttribute("Min", DoubleValue(0.0));
+        staticUePosRng->SetAttribute("Max", DoubleValue(1.0));
 
         g_staticRemoteHostContainer.Create(1);
         Ptr<Node> staticRemoteHost = g_staticRemoteHostContainer.Get(0);
@@ -841,26 +904,28 @@ scenarioSetup(
         staticUeMob.SetMobilityModel("ns3::ConstantPositionMobilityModel");
         staticUeMob.Install(g_staticUeContainer);
 
-        Ptr<UniformRandomVariable> staticUeHeightRng = CreateObject<UniformRandomVariable>();
+        Ptr<UniformRandomVariable> staticUeRng = CreateObject<UniformRandomVariable>();
+        staticUeRng->SetAttribute("Min", DoubleValue(0.0));
+        staticUeRng->SetAttribute("Max", DoubleValue(1.0));
         uint32_t numAerial = 0;
         for (uint32_t i = 0; i < addStaticUes; ++i)
         {
-            double angle = 2.0 * M_PI * i / addStaticUes;
-            double x = centerX + circleRadius * std::cos(angle);
-            double y = centerY + circleRadius * std::sin(angle);
-            double ueHeight = (staticUeHeightRng->GetValue() < aerialUeRatio)
-                                  ? (50.0 + staticUeHeightRng->GetValue() * 250.0)
+            double x = bbox.minX + staticUeRng->GetValue() * (bbox.maxX - bbox.minX);
+            double y = bbox.minY + staticUeRng->GetValue() * (bbox.maxY - bbox.minY);
+            double ueHeight = (staticUeRng->GetValue() < aerialUeRatio)
+                                  ? (50.0 + staticUeRng->GetValue() * 250.0)
                                   : 1.5;
             if (ueHeight > 1.5)
             {
                 numAerial++;
             }
-            g_staticUeContainer.Get(i)->GetObject<MobilityModel>()->SetPosition(Vector(x, y, ueHeight));
-            std::cout << "Static UE " << i << " position: (" << x << ", " << y << ", " << ueHeight
-                      << ")" << std::endl;
+            g_staticUeContainer.Get(i)->GetObject<MobilityModel>()->SetPosition(
+                Vector(x, y, ueHeight));
+            // std::cout << "Static UE " << i << " position: (" << x << ", " << y << ", " << ueHeight
+            //           << ")" << std::endl;
         }
-        std::cout << "Static UEs: " << numAerial << " aerial, " << (addStaticUes - numAerial)
-                  << " ground" << std::endl;
+        // std::cout << "Static UEs: " << numAerial << " aerial, " << (addStaticUes - numAerial)
+        //           << " ground" << std::endl;
 
         g_staticUeLteDevs = lteHelper->InstallUeDevice(g_staticUeContainer);
         internet.Install(g_staticUeContainer);
@@ -933,16 +998,44 @@ scenarioSetup(
     Config::ConnectWithoutContext(bulkSenderConfigPath + "ConnectionSucceeded",
                                   MakeCallback((&NotifyConnectionSucceeded)));
 
-    Config::Connect("/NodeList/" + std::to_string(uavNodeId) +
-                        "/$ns3::MobilityModel/CourseChange",
-                    MakeCallback(&MobilityCourseChange));
+    Config::ConnectWithoutContext("/NodeList/" + std::to_string(uavNodeId) +
+                                      "/DeviceList/*/LteUeRrc/HandoverEndOk",
+                                  MakeCallback(&HandoverOk));
+    Config::ConnectWithoutContext("/NodeList/" + std::to_string(uavNodeId) +
+                                      "/DeviceList/*/LteUeRrc/HandoverEndError",
+                                  MakeCallback(&HandoverError));
+
+    Simulator::Schedule(Seconds(1.1), []() {
+        Ptr<Node> uav = g_uavContainer.Get(0);
+        auto ueDev = uav->GetDevice(0)->GetObject<LteUeNetDevice>();
+        auto rrc = ueDev->GetRrc();
+        auto ipv4 = uav->GetObject<Ipv4>();
+        std::cout << "DEBUG t=" << Simulator::Now().GetSeconds() << " rrcState=" << rrc->GetState()
+                  << " cellId=" << rrc->GetCellId() << " ueIp=" << ipv4->GetAddress(1, 0).GetLocal()
+                  << std::endl;
+    });
+    // Schedule metric-accumulating traces (always connected, regardless of logging)
+    Simulator::Schedule(Seconds(1.1), [uavNodeId, remoteHostNodeId, bulkSenderConfigPath]() {
+        std::string retransPath = "/NodeList/" + std::to_string(uavNodeId) +
+                                  "/$ns3::TcpL4Protocol/SocketList/0/Retransmission";
+        Config::ConnectWithoutContext(retransPath, MakeCallback(&SourceRetransmissionPacket));
+
+        std::string rxPath = "/NodeList/" + std::to_string(remoteHostNodeId) +
+                             "/ApplicationList/*/$ns3::PacketSink/Rx";
+        Config::ConnectWithoutContext(rxPath, MakeCallback(&SinkRxPacket));
+
+        std::string rttPath =
+            "/NodeList/" + std::to_string(uavNodeId) + "/$ns3::TcpL4Protocol/SocketList/0/RTT";
+        Config::ConnectWithoutContext(rttPath, MakeCallback(&TcpRttChange));
+
+        std::string tcpStatePath =
+            "/NodeList/" + std::to_string(uavNodeId) + "/$ns3::TcpL4Protocol/SocketList/0/State";
+        Config::ConnectWithoutContext(tcpStatePath,
+                                      MakeCallback(&NotifyTcpStateChange));
+    });
 
     if (logging)
     {
-        Config::ConnectWithoutContext("/NodeList/" + std::to_string(uavNodeId) +
-                                          "/DeviceList/*/LteUeRrc/HandoverEndOk",
-                                      MakeCallback(&HandoverOk));
-
         Simulator::Schedule(Seconds(1.1), [uavNodeId, remoteHostNodeId, bulkSenderConfigPath]() {
             std::string path = "/NodeList/" + std::to_string(uavNodeId) +
                                "/$ns3::TcpL4Protocol/SocketList/0/CongestionWindow";
@@ -950,22 +1043,11 @@ scenarioSetup(
 
             Config::ConnectWithoutContext(bulkSenderConfigPath + "Tx",
                                           MakeCallback(&SourceTxPacket));
-
-            std::string retransPath = "/NodeList/" + std::to_string(uavNodeId) +
-                                      "/$ns3::TcpL4Protocol/SocketList/0/Retransmission";
-            Config::ConnectWithoutContext(retransPath,
-                                          MakeCallback(&SourceRetransmissionPacket));
-
-            std::string rxPath = "/NodeList/" + std::to_string(remoteHostNodeId) +
-                                 "/ApplicationList/*/$ns3::PacketSink/Rx";
-            Config::ConnectWithoutContext(rxPath, MakeCallback(&SinkRxPacket));
         });
 
-        Simulator::Schedule(Seconds(1.1), [uavNodeId]() {
-            std::string path = "/NodeList/" + std::to_string(uavNodeId) +
-                               "/$ns3::TcpL4Protocol/SocketList/0/RTT";
-            Config::ConnectWithoutContext(path, MakeCallback(&TcpRttChange));
-        });
+        Config::Connect("/NodeList/" + std::to_string(uavNodeId) +
+                            "/$ns3::MobilityModel/CourseChange",
+                        MakeCallback(&MobilityCourseChange));
 
         if (tcpVariant == "TcpBbr")
         {
@@ -973,20 +1055,17 @@ scenarioSetup(
                 std::string pacingGainPath =
                     "/NodeList/" + std::to_string(uavNodeId) +
                     "/$ns3::TcpL4Protocol/SocketList/0/CongestionOps/$ns3::TcpBbr/PacingGain";
-                Config::ConnectWithoutContext(pacingGainPath,
-                                              MakeCallback(&BbrPacingGainChange));
+                Config::ConnectWithoutContext(pacingGainPath, MakeCallback(&BbrPacingGainChange));
 
                 std::string cwndGainPath =
                     "/NodeList/" + std::to_string(uavNodeId) +
                     "/$ns3::TcpL4Protocol/SocketList/0/CongestionOps/$ns3::TcpBbr/CwndGain";
-                Config::ConnectWithoutContext(cwndGainPath,
-                                              MakeCallback(&BbrCwndGainChange));
+                Config::ConnectWithoutContext(cwndGainPath, MakeCallback(&BbrCwndGainChange));
 
                 std::string ratePath =
                     "/NodeList/" + std::to_string(uavNodeId) +
                     "/$ns3::TcpL4Protocol/SocketList/0/RateOps/TcpRateSampleUpdated";
-                Config::ConnectWithoutContext(ratePath,
-                                              MakeCallback(&TcpRateSampleChange));
+                Config::ConnectWithoutContext(ratePath, MakeCallback(&TcpRateSampleChange));
             });
         }
 
@@ -995,10 +1074,10 @@ scenarioSetup(
                 "/DeviceList/*/ComponentCarrierMapUe/*/LteUePhy/ReportCurrentCellRsrpSinr",
             MakeCallback(&ReportUeMeasurements));
 
-        Config::ConnectWithoutContext(
-            "/NodeList/" + std::to_string(uavNodeId) +
-                "/DeviceList/*/$ns3::LteUeNetDevice/ComponentCarrierMapUe/*/LteUePhy/UlPhyTransmission",
-            MakeCallback(&ReportPhyTransmissionStatParameter));
+        Config::ConnectWithoutContext("/NodeList/" + std::to_string(uavNodeId) +
+                                          "/DeviceList/*/$ns3::LteUeNetDevice/"
+                                          "ComponentCarrierMapUe/*/LteUePhy/UlPhyTransmission",
+                                      MakeCallback(&ReportPhyTransmissionStatParameter));
 
         Config::ConnectWithoutContext(
             "/NodeList/*/DeviceList/*/ComponentCarrierMap/*/LteEnbPhy/ReportUeSinr",
@@ -1006,8 +1085,7 @@ scenarioSetup(
 
         Simulator::Schedule(Seconds(1.1), [uavNodeId]() {
             Ptr<Node> uavNode = NodeList::GetNode(uavNodeId);
-            Ptr<LteUeNetDevice> ueNetDev =
-                uavNode->GetDevice(0)->GetObject<LteUeNetDevice>();
+            Ptr<LteUeNetDevice> ueNetDev = uavNode->GetDevice(0)->GetObject<LteUeNetDevice>();
             if (ueNetDev)
             {
                 Ptr<LteUePhy> uePhy = ueNetDev->GetPhy();
@@ -1016,6 +1094,10 @@ scenarioSetup(
                                                       MakeCallback(&ReportUeTxPower));
             }
         });
+
+        Config::Connect("/NodeList/*/DeviceList/*/$ns3::LteNetDevice/$ns3::LteUeNetDevice/LteUeRrc"
+                        "/StateTransition",
+                        MakeCallback(&UavRrcStateChange));
     }
 
     // Add X2 Interface (already added inside hexgrid block)
@@ -1024,7 +1106,77 @@ scenarioSetup(
         lteHelper->AddX2Interface(g_enbContainer);
     }
 
-    Config::Connect("/NodeList/*/DeviceList/*/$ns3::LteNetDevice/$ns3::LteUeNetDevice/LteUeRrc"
-                    "/StateTransition",
-                    MakeCallback(&UavRrcStateChange));
+    // ---- RL Framework: Install handover RL apps on UAV node ---- //
+    if (rlMode)
+    {
+        uint32_t numBs = g_enbContainer.GetN();
+        uint32_t uavNodeId = g_uavContainer.Get(0)->GetId();
+        g_lastRsrpValues.resize(numBs + 1, -1); // index by cellId (1-based)
+
+        // std::cout << "Installing RL handover apps (NumBs=" << numBs << ", StepTime=" << stepTime
+        //           << "ms"
+        //           << ", delay=" << delay << "ms"
+        //           << ", handoverPenalty=" << handoverPenalty << ", uavNodeId=" << uavNodeId << ")"
+        //           << std::endl;
+
+        uint32_t remoteHostNodeId = g_remoteHostContainer.Get(0)->GetId();
+
+        RlApplicationHelper rlAppHelper(HarlTcpHandoverRewardApp::GetTypeId());
+        rlAppHelper.SetAttribute("StartTime", TimeValue(Seconds(0.5)));
+        rlAppHelper.SetAttribute("StopTime", TimeValue(Seconds(simDuration)));
+        rlAppHelper.SetAttribute("RemoteHostNodeId", UintegerValue(remoteHostNodeId));
+        rlAppHelper.SetAttribute("HandoverPenalty", DoubleValue(handoverPenalty));
+        rlAppHelper.SetAttribute("ReferenceRate", DoubleValue(referenceRateBps));
+        rlAppHelper.SetAttribute("RttPenaltyWeight", DoubleValue(rttPenaltyWeight));
+        rlAppHelper.SetAttribute("MinRttMs", DoubleValue(minRttMs));
+        rlAppHelper.SetAttribute("TcpFailurePenalty", DoubleValue(tcpFailurePenalty));
+        rlAppHelper.SetAttribute("RlfPenalty", DoubleValue(rlfPenalty));
+        auto rewardApps = rlAppHelper.Install(g_uavContainer.Get(0));
+
+        rlAppHelper.SetTypeId(HarlTcpHandoverAgentApp::GetTypeId());
+        rlAppHelper.SetAttribute("StartTime", TimeValue(Seconds(0.5)));
+        rlAppHelper.SetAttribute("NumBs", UintegerValue(numBs));
+        rlAppHelper.SetAttribute("NumUes", UintegerValue(1));
+        auto agentApps = rlAppHelper.Install(g_uavContainer.Get(0));
+
+        rlAppHelper.SetTypeId(HarlTcpHandoverObservationApp::GetTypeId());
+        rlAppHelper.SetAttribute("StartTime", TimeValue(Seconds(0.5)));
+        rlAppHelper.SetAttribute("NumBs", UintegerValue(numBs));
+        rlAppHelper.SetAttribute("UavNodeId", UintegerValue(uavNodeId));
+        auto obsApps = rlAppHelper.Install(g_uavContainer.Get(0));
+
+        rlAppHelper.SetTypeId(HarlTcpHandoverActionApp::GetTypeId());
+        rlAppHelper.SetAttribute("StartTime", TimeValue(Seconds(0.5)));
+        rlAppHelper.SetAttribute("NumBs", UintegerValue(numBs));
+        rlAppHelper.SetAttribute("HandoverAlgorithm", StringValue("agent"));
+        rlAppHelper.SetAttribute("HandoverMargin", DoubleValue(handoverMargin));
+        auto actApps = rlAppHelper.Install(g_uavContainer.Get(0));
+
+        // --- CommunicationHelper: wire the apps together ---
+        CommunicationHelper commHelper;
+        commHelper.SetAgentApps(agentApps);
+        commHelper.SetActionApps(actApps);
+        commHelper.SetObservationApps(obsApps);
+        commHelper.SetRewardApps(rewardApps);
+        commHelper.SetIds();
+
+        // Connect obs(0) -> agent(0), act(0) -> agent(0), reward(0) -> agent(0)
+        // Since everything is on the UAV node, we use the configured delay
+        commHelper.AddCommunication(
+            {CommunicationPair{obsApps.GetId(0),
+                               agentApps.GetId(0),
+                               CommunicationAttributes{MilliSeconds(delay)}}});
+        commHelper.AddCommunication(
+            {CommunicationPair{actApps.GetId(0),
+                               agentApps.GetId(0),
+                               CommunicationAttributes{MilliSeconds(delay)}}});
+        commHelper.AddCommunication(
+            {CommunicationPair{rewardApps.GetId(0),
+                               agentApps.GetId(0),
+                               CommunicationAttributes{MilliSeconds(delay)}}});
+
+        commHelper.Configure();
+
+        // std::cout << "RL handover apps installed on UAV node " << uavNodeId << std::endl;
+    }
 }
