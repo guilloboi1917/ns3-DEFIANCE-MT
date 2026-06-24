@@ -19,8 +19,9 @@
 using namespace ns3;
 
 // External globals from the scenario (outside namespace ns3 to match definitions in harl-tcp-scenario.cc)
-extern std::vector<int32_t> g_lastRsrpValues;
+extern std::vector<double> g_lastRsrpValues;
 extern std::vector<double> g_lastSinrValues;
+extern std::vector<double> g_lastRsrqValues;
 extern NetDeviceContainer g_uavLteDevs;
 extern NetDeviceContainer g_enbLteDevs;
 
@@ -55,7 +56,20 @@ HarlTcpHandoverObservationApp::GetTypeId()
                           "Node ID of the UAV for Config path registration.",
                           UintegerValue(0),
                           MakeUintegerAccessor(&HarlTcpHandoverObservationApp::m_uavNodeId),
-                          MakeUintegerChecker<uint32_t>());
+                          MakeUintegerChecker<uint32_t>())
+            .AddAttribute("StepTimeMs",
+                          "RL step interval (ms). Observation is sent at this cadence.",
+                          UintegerValue(480),
+                          MakeUintegerAccessor(&HarlTcpHandoverObservationApp::m_stepTimeMs),
+                          MakeUintegerChecker<uint32_t>())
+            .AddAttribute("HandoverMargin",
+                          "RSRP margin (3GPP range, ~1 dB per step). "
+                          "Target must have RSRP > serving + margin. "
+                          "-999 disables gating.",
+                          DoubleValue(3.0),
+                          MakeDoubleAccessor(
+                              &HarlTcpHandoverObservationApp::m_handoverMargin),
+                          MakeDoubleChecker<double>());
     return tid;
 }
 
@@ -64,8 +78,8 @@ HarlTcpHandoverObservationApp::DoInitialize()
 {
     ObservationApplication::DoInitialize();
 
-    m_rsrpValues = std::vector<int32_t>(m_numBs, -1);
-    m_rsrqValues = std::vector<int32_t>(m_numBs, -1);
+    m_rsrpValues = std::vector<double>(m_numBs, -140.0); // sentinel in typical RSRP range
+    m_rsrqValues = std::vector<double>(m_numBs, -20.0);  // sentinel in typical RSRQ range
     m_sinrValues = std::vector<double>(m_numBs, -40.0); // -40 dB = sentinel for "no measurement"
     m_currentCellId = 0;
     m_currentRrcState = 0;
@@ -80,6 +94,9 @@ HarlTcpHandoverObservationApp::DoInitialize()
     m_uavVelZ = 0.0;
     m_lastMcs = 0;
     m_lastTxPowerDbm = 0.0;
+    m_lastRsrpSnapshot = std::vector<double>(m_numBs, -140.0);
+    m_lastRsrqSnapshot = std::vector<double>(m_numBs, -20.0);
+    m_lastSinrSnapshot = -40.0;
     m_lastSendTime = Seconds(0);
 
 
@@ -92,17 +109,18 @@ HarlTcpHandoverObservationApp::RegisterCallbacks()
 {
     uint32_t nodeId = GetNode()->GetId();
 
-    // --- Connect to eNB measurement reports ---
-    // Iterate over all eNBs to get per-cell measurement reports
+    // --- Connect to UAV PHY for per-cell RSRP/RSRQ (all detectable cells, dBm) ---
+    Config::ConnectWithoutContext(
+        "/NodeList/" + std::to_string(m_uavNodeId) +
+            "/DeviceList/*/$ns3::LteUeNetDevice/ComponentCarrierMapUe/*/LteUePhy/"
+            "ReportUeMeasurements",
+        MakeCallback(&HarlTcpHandoverObservationApp::ObserveUeRsrpRsrq, this));
+
+    // --- Connect to eNB ReportUeSinr traces ---
     for (uint32_t i = 0; i < g_enbLteDevs.GetN(); ++i)
     {
         auto enbNode = g_enbLteDevs.Get(i)->GetNode();
         uint32_t enbNodeId = enbNode->GetId();
-
-        Config::ConnectWithoutContext(
-            "/NodeList/" + std::to_string(enbNodeId) +
-                "/DeviceList/*/$ns3::LteEnbNetDevice/LteEnbRrc/RecvMeasurementReport",
-            MakeCallback(&HarlTcpHandoverObservationApp::ObserveMeasurementReport, this));
 
         Config::ConnectWithoutContext(
             "/NodeList/" + std::to_string(enbNodeId) +
@@ -171,13 +189,20 @@ HarlTcpHandoverObservationApp::RegisterCallbacks()
     });
 
     NS_LOG_INFO("HarlTcpHandoverObservationApp callbacks registered on node " << nodeId);
+
+    // Kick off periodic observation send at stepTimeMs cadence
+    Simulator::Schedule(MilliSeconds(m_stepTimeMs),
+                        &HarlTcpHandoverObservationApp::SendObservation,
+                        this);
 }
 
 void
-HarlTcpHandoverObservationApp::ObserveMeasurementReport(uint64_t imsi,
-                                                        uint16_t cellId,
-                                                        uint16_t rnti,
-                                                        LteRrcSap::MeasurementReport report)
+HarlTcpHandoverObservationApp::ObserveUeRsrpRsrq(uint16_t rnti,
+                                                     uint16_t cellId,
+                                                     double rsrp,
+                                                     double rsrq,
+                                                     bool isServingCell,
+                                                     uint8_t componentCarrierId)
 {
     // Guard: ensure vectors are initialized
     if (m_rsrpValues.empty())
@@ -185,7 +210,7 @@ HarlTcpHandoverObservationApp::ObserveMeasurementReport(uint64_t imsi,
         return;
     }
 
-    // Filter for our primary UAV UE only
+    // Filter for our primary UAV UE — query RNTI fresh each call (RNTI changes after handover)
     if (g_uavLteDevs.GetN() == 0)
     {
         return;
@@ -195,48 +220,37 @@ HarlTcpHandoverObservationApp::ObserveMeasurementReport(uint64_t imsi,
     {
         return;
     }
-    auto uavImsi = ueNetDev->GetImsi();
-    if (imsi != uavImsi)
+    auto ueRrc = ueNetDev->GetRrc();
+    if (!ueRrc)
+    {
+        return;
+    }
+    auto uavRnti = ueRrc->GetRnti();
+    if (rnti != uavRnti)
     {
         return;
     }
 
-    // Update serving cell RSRP and RSRQ
-    auto rsrp = report.measResults.measResultPCell.rsrpResult;
-    auto rsrq = report.measResults.measResultPCell.rsrqResult;
+    // Store RSRP/RSRQ (dBm) for this cell — lightweight, no send overhead
     if (cellId > 0 && cellId <= m_numBs)
     {
         m_rsrpValues[cellId - 1] = rsrp;
         m_rsrqValues[cellId - 1] = rsrq;
+
+        if (isServingCell)
+        {
+            m_currentCellId = cellId;
+        }
+
         if (cellId < g_lastRsrpValues.size())
         {
             g_lastRsrpValues[cellId] = rsrp;
         }
-    }
-
-    // Update neighbor cell measurements
-    auto listEutra = report.measResults.measResultListEutra;
-    for (auto it = listEutra.begin(); it != listEutra.end(); ++it)
-    {
-        auto neighborCellId = it->physCellId;
-        if (neighborCellId > 0 && neighborCellId <= m_numBs)
+        if (cellId < g_lastRsrqValues.size())
         {
-            m_rsrpValues[neighborCellId - 1] = it->rsrpResult;
-            m_rsrqValues[neighborCellId - 1] = it->rsrqResult;
-            if (neighborCellId < g_lastRsrpValues.size())
-            {
-                g_lastRsrpValues[neighborCellId] = it->rsrpResult;
-            }
+            g_lastRsrqValues[cellId] = rsrq;
         }
     }
-
-    m_currentCellId = cellId;
-
-    // --- Send observation to agent (event-driven) ---
-    Send(BuildObservation());
-
-    NS_LOG_INFO("Measurement report: cellId=" << cellId
-                << " RSRP=" << rsrp);
 }
 
 void
@@ -318,7 +332,15 @@ HarlTcpHandoverObservationApp::ObserveRrcState(std::string context,
 void
 HarlTcpHandoverObservationApp::ObserveCwnd(uint32_t oldCwnd, uint32_t newCwnd)
 {
-    m_currentCwnd = static_cast<int32_t>(newCwnd);
+    if (newCwnd > INT32_MAX)
+    {
+        NS_LOG_WARN("BBR cwnd > INT32_MAX, clamping to 0: " << newCwnd);
+        m_currentCwnd = 0;
+    }
+    else
+    {
+        m_currentCwnd = static_cast<int32_t>(newCwnd);
+    }
 }
 
 void
@@ -350,17 +372,26 @@ HarlTcpHandoverObservationApp::ObserveUeTxPower(uint16_t cellId,
                                  << ", RNTI " << rnti << ")");
 }
 
+/// Clamp a value to [lo, hi] (inline replacement for std::clamp, which requires C++17).
+static double
+Clamp(double val, double lo, double hi)
+{
+    return val < lo ? lo : (val > hi ? hi : val);
+}
+
 Ptr<OpenGymDictContainer>
 HarlTcpHandoverObservationApp::BuildObservation()
 {
     // --- Per-cell measurements ---
-    auto rsrps = CreateObject<OpenGymBoxContainer<int32_t>>();
-    auto rsrqs = CreateObject<OpenGymBoxContainer<int32_t>>();
+    auto rsrps = MakeBoxContainer<double>(m_numBs);
+    auto rsrqs = MakeBoxContainer<double>(m_numBs);
 
     for (uint32_t i = 0; i < m_numBs; i++)
     {
-        rsrps->AddValue(m_rsrpValues[i]);
-        rsrqs->AddValue(m_rsrqValues[i]);
+        double rsrp = std::isnan(m_rsrpValues[i]) ? -140.0 : m_rsrpValues[i];
+        double rsrq = std::isnan(m_rsrqValues[i]) ? -20.0 : m_rsrqValues[i];
+        rsrps->AddValue(Clamp(rsrp, -160.0, -40.0));
+        rsrqs->AddValue(Clamp(rsrq, -100.0, -3.0));
     }
 
     // Current serving cell UL SINR (scalar — only meaningful for serving cell)
@@ -369,7 +400,33 @@ HarlTcpHandoverObservationApp::BuildObservation()
     {
         currentSinr = m_sinrValues[m_currentCellId - 1];
     }
-    auto sinrContainer = MakeBoxContainer<double>(1, currentSinr);
+    auto sinrContainer = MakeBoxContainer<double>(1, Clamp(std::isnan(currentSinr) ? -40.0 : currentSinr, -40.0, 50.0));
+
+    // --- Deltas (change since last observation) ---
+    auto rsrpDelta = MakeBoxContainer<double>(m_numBs);
+    auto rsrqDelta = MakeBoxContainer<double>(m_numBs);
+    for (uint32_t i = 0; i < m_numBs; i++)
+    {
+        double prevRsrp = (i < m_lastRsrpSnapshot.size()) ? m_lastRsrpSnapshot[i] : -200.0;
+        double prevRsrq = (i < m_lastRsrqSnapshot.size()) ? m_lastRsrqSnapshot[i] : -200.0;
+        // Guard: use rsrp/rsrq after sentinel replacement (done above), just guard delta from nan snapshot
+        double curRsrp = std::isnan(m_rsrpValues[i]) ? -140.0 : m_rsrpValues[i];
+        double curRsrq = std::isnan(m_rsrqValues[i]) ? -20.0 : m_rsrqValues[i];
+        double dRsrp = (curRsrp > -110.0 && prevRsrp > -110.0) ? curRsrp - prevRsrp : 0.0;
+        double dRsrq = (curRsrq > -20.0 && prevRsrq > -20.0) ? curRsrq - prevRsrq : 0.0;
+        rsrpDelta->AddValue(Clamp(dRsrp, -60.0, 60.0));
+        rsrqDelta->AddValue(Clamp(dRsrq, -60.0, 60.0));
+    }
+    double sinrVal = std::isnan(currentSinr) ? -40.0 : currentSinr;
+    double sinrDeltaVal = (sinrVal != -40.0 && !std::isnan(m_lastSinrSnapshot) && m_lastSinrSnapshot != -40.0)
+                              ? sinrVal - m_lastSinrSnapshot
+                              : 0.0;
+    auto sinrDeltaContainer = MakeBoxContainer<double>(1, Clamp(sinrDeltaVal, -20.0, 20.0));
+
+    // Update snapshots for next step
+    m_lastRsrpSnapshot = m_rsrpValues;
+    m_lastRsrqSnapshot = m_rsrqValues;
+    m_lastSinrSnapshot = sinrVal;
 
     // --- Cell ID ---
     auto cellIdContainer = CreateObject<OpenGymDiscreteContainer>();
@@ -396,37 +453,72 @@ HarlTcpHandoverObservationApp::BuildObservation()
                                                   m_uavPosY,
                                                   m_uavPosZ);
     auto velContainer = MakeBoxContainer<double>(3,
-                                                  m_uavVelX,
-                                                  m_uavVelY,
-                                                  m_uavVelZ);
+                                                  Clamp(m_uavVelX, -200.0, 200.0),
+                                                  Clamp(m_uavVelY, -200.0, 200.0),
+                                                  Clamp(m_uavVelZ, -200.0, 200.0));
 
     // --- PHY metrics ---
-    auto mcsContainer = MakeBoxContainer<int32_t>(1, m_lastMcs);
-    auto txPowerContainer = MakeBoxContainer<double>(1, m_lastTxPowerDbm);
+    auto mcsContainer = MakeBoxContainer<int32_t>(1, static_cast<int32_t>(Clamp(static_cast<double>(m_lastMcs), 0.0, 31.0)));
+    auto txPowerContainer = MakeBoxContainer<double>(1, Clamp(m_lastTxPowerDbm, -50.0, 50.0));
 
     // --- TCP metrics ---
-    auto cwndContainer = MakeBoxContainer<int32_t>(1, m_currentCwnd);
-    auto rttContainer = MakeBoxContainer<int32_t>(1, m_currentRttMs);
-
-    // --- BBR metrics ---
-    auto deliveryRateContainer = MakeBoxContainer<int32_t>(1, m_deliveryRateBps);
+    auto rttContainer = MakeBoxContainer<int32_t>(1, static_cast<int32_t>(Clamp(static_cast<double>(m_currentRttMs), 0.0, 10000.0)));
 
     // --- Build dict ---
     auto dict = CreateObject<OpenGymDictContainer>();
     dict->Add("rsrps", rsrps);
     dict->Add("rsrqs", rsrqs);
     dict->Add("sinr", sinrContainer);
+    dict->Add("rsrpDelta", rsrpDelta);
+    dict->Add("rsrqDelta", rsrqDelta);
+    dict->Add("sinrDelta", sinrDeltaContainer);
     dict->Add("cellId", cellIdContainer);
-    dict->Add("rrcState", rrcStateContainer);
     dict->Add("position", posContainer);
     dict->Add("velocity", velContainer);
     dict->Add("mcs", mcsContainer);
     dict->Add("txPower", txPowerContainer);
-    dict->Add("cwnd", cwndContainer);
     dict->Add("rtt", rttContainer);
-    dict->Add("deliveryRate", deliveryRateContainer);
+
+    // --- Action mask (0/1 per action: 0=no-op, 1..numBs=target cell) ---
+    auto actionMask = MakeBoxContainer<double>(m_numBs + 1);
+    actionMask->AddValue(1.0);  // no-op always valid
+
+    if (m_handoverMargin > -999.0 && m_currentCellId > 0 && m_currentCellId <= m_numBs)
+    {
+        double servingRsrp = m_rsrpValues[m_currentCellId - 1];
+        for (uint32_t i = 1; i <= m_numBs; i++)
+        {
+            bool valid = (i != m_currentCellId) &&
+                         (m_rsrpValues[i - 1] > -110.0) &&
+                         (servingRsrp > -110.0) &&
+                         (m_rsrpValues[i - 1] > servingRsrp + m_handoverMargin);
+            actionMask->AddValue(valid ? 1.0 : 0.0);
+        }
+    }
+    else
+    {
+        // Margin disabled or current cell unknown:
+        // block same-cell and cells below noise floor
+        for (uint32_t i = 1; i <= m_numBs; i++)
+        {
+            bool valid = (i != m_currentCellId) &&
+                         (m_rsrpValues[i - 1] > -110.0);
+            actionMask->AddValue(valid ? 1.0 : 0.0);
+        }
+    }
+    dict->Add("action_mask", actionMask);
 
     return dict;
+}
+
+void
+HarlTcpHandoverObservationApp::SendObservation()
+{
+    Send(BuildObservation());
+    // Reschedule at stepTimeMs cadence
+    Simulator::Schedule(MilliSeconds(m_stepTimeMs),
+                        &HarlTcpHandoverObservationApp::SendObservation,
+                        this);
 }
 
 } // namespace ns3

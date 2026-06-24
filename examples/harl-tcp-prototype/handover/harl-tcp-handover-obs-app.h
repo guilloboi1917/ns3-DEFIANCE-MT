@@ -42,11 +42,13 @@ class HarlTcpHandoverObservationApp : public ObservationApplication
 
     // --- Callback handlers ---
 
-    /** Handle RecvMeasurementReport from the serving eNB. */
-    void ObserveMeasurementReport(uint64_t imsi,
-                                  uint16_t cellId,
-                                  uint16_t rnti,
-                                  LteRrcSap::MeasurementReport report);
+    /** Handle ReportUeRsrpRsrq from the UAV PHY (per-cell RSRP/RSRQ in dBm). */
+    void ObserveUeRsrpRsrq(uint16_t rnti,
+                           uint16_t cellId,
+                           double rsrp,
+                           double rsrq,
+                           bool isServingCell,
+                           uint8_t componentCarrierId);
 
     /** Handle ReportUeSinr (SRS-based UL SINR) from eNBs. */
     void ObserveUlSinr(uint16_t cellId, uint16_t rnti, double sinrLinear, uint8_t ccId);
@@ -82,10 +84,11 @@ class HarlTcpHandoverObservationApp : public ObservationApplication
     uint32_t m_numBs;            ///< Number of eNBs/cells in the scenario
     uint32_t m_stepTimeMs;       ///< Observation interval in ms
     uint32_t m_uavNodeId;        ///< Node ID of the UAV (for Config paths)
+    double m_handoverMargin{3.0}; ///< RSRP margin (dB) for action mask
 
     // Per-cell measurement storage
-    std::vector<int32_t> m_rsrpValues;   ///< RSRP per cell (-1 = unknown)
-    std::vector<int32_t> m_rsrqValues;   ///< RSRQ per cell (-1 = unknown)
+    std::vector<double> m_rsrpValues;   ///< RSRP per cell in dBm (-200 = unknown)
+    std::vector<double> m_rsrqValues;   ///< RSRQ per cell in dB  (-200 = unknown)
     std::vector<double> m_sinrValues;    ///< SINR per cell in dB (-40 = unknown)
 
     // UE state
@@ -115,10 +118,16 @@ class HarlTcpHandoverObservationApp : public ObservationApplication
     // Timing
     Time m_lastSendTime{Seconds(0)};
 
-
+    // Previous-step snapshots for computing deltas
+    std::vector<double> m_lastRsrpSnapshot;  ///< RSRP values at last step (for delta)
+    std::vector<double> m_lastRsrqSnapshot;  ///< RSRQ values at last step (for delta)
+    double m_lastSinrSnapshot{-40.0};          ///< SINR at last step (for delta)
 
     /** Build the current observation dict from cached values. */
     Ptr<OpenGymDictContainer> BuildObservation();
+
+    /** Periodic send of observation (scheduled at m_stepTimeMs intervals). */
+    void SendObservation();
 };
 
 } // namespace ns3

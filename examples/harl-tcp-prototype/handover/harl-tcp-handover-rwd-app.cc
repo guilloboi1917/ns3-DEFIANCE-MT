@@ -5,13 +5,17 @@
  * @brief Reward application for the HARL TCP handover RL agent.
  *
  * Reward design:
- *   reward = normGoodput - hoPenalty*hoCount - rttPenalty - tcpPenalty - rlfTerm - pingPongTerm
+ *   reward = normGoodput - rttPenalty - tcpPenalty - rlfTerm
  *
- *   normGoodput    = min(goodput / referenceRate, 1.0)
- *   rttPenalty     = rttWeight * max(0, rttMs - minRttMs) / minRttMs
- *   tcpPenalty     = tcpFailurePenalty            (per step when !g_tcpAlive)
- *   rlfTerm        = rlfPenalty                   (one-shot on RLF)
- *   pingPongTerm   = pingPongPenalty * hoCount    (if handovers within PingPongInterval)
+ *   normGoodput:
+ *      1.0                                    if goodput >= referenceRate
+ *      (goodput - minAcceptable) / (ref - min) if minAcceptable <= goodput < ref
+ *      (goodput - minAcceptable) / minAcceptable   if goodput < minAcceptable (negative)
+ *
+ *   rttPenalty:
+ *      0.0                                    if rtt <= delayMinRtt
+ *      (rtt - delayMinRtt) / (maxRtt - delayMinRtt)  if delayMinRtt < rtt < maxRtt
+ *      1.0                                    if rtt >= maxAcceptableRtt
  *
  * - Goodput is measured from the PacketSink Rx trace on the remote host
  *   (UAV is the TCP sender, UL application-layer goodput).
@@ -31,7 +35,8 @@
 
 using namespace ns3;
 
-// External globals from the scenario (outside namespace ns3 to match definitions in harl-tcp-scenario.cc)
+// External globals from the scenario (outside namespace ns3 to match definitions in
+// harl-tcp-scenario.cc)
 extern NetDeviceContainer g_uavLteDevs;
 extern NodeContainer g_uavContainer;
 extern NodeContainer g_remoteHostContainer;
@@ -68,52 +73,54 @@ HarlTcpHandoverRewardApp::GetTypeId()
                           MakeUintegerChecker<uint32_t>())
             .AddAttribute("HandoverPenalty",
                           "Reward penalty per handover (in normalized [0,1] units).",
-                          DoubleValue(0.01),
+                          DoubleValue(0.03),
                           MakeDoubleAccessor(&HarlTcpHandoverRewardApp::m_handoverPenalty),
                           MakeDoubleChecker<double>())
             .AddAttribute("ReferenceRate",
                           "Reference UL data rate (bps) for throughput normalization. "
-                          "Throughput is divided by this value and clamped to [0,1].",
-                          DoubleValue(30000000.0),
+                          "Throughput >= this value yields reward=1.",
+                          DoubleValue(5000000.0),
                           MakeDoubleAccessor(&HarlTcpHandoverRewardApp::m_referenceRateBps),
                           MakeDoubleChecker<double>())
-            .AddAttribute("RttPenaltyWeight",
-                          "Weight of the RTT inflation penalty term. "
-                          "rttInflation = max(0, currentRtt - minRtt) / minRtt.",
-                          DoubleValue(0.05),
-                          MakeDoubleAccessor(&HarlTcpHandoverRewardApp::m_rttPenaltyWeight),
+            .AddAttribute(
+                "MinimumAcceptableGoodput",
+                "Minimum acceptable UL goodput (bps). "
+                "Goodput below this yields negative reward; "
+                "goodput between this and ReferenceRate ramps linearly 0->1.",
+                DoubleValue(2500000.0),
+                MakeDoubleAccessor(&HarlTcpHandoverRewardApp::m_minimumAcceptableGoodputBps),
+                MakeDoubleChecker<double>())
+            .AddAttribute("DelayMinRttMs",
+                          "Lower bound RTT (ms) for delay penalty. "
+                          "No penalty when RTT <= this value.",
+                          DoubleValue(55.0),
+                          MakeDoubleAccessor(&HarlTcpHandoverRewardApp::m_delayMinRttMs),
                           MakeDoubleChecker<double>())
-            .AddAttribute("MinRttMs",
-                          "Baseline RTT (ms) for inflation calculation. "
-                          "Floor is ~10ms PGW-Server p2p + ~20ms LTE processing.",
-                          DoubleValue(30.0),
-                          MakeDoubleAccessor(&HarlTcpHandoverRewardApp::m_minRttMs),
+            .AddAttribute("MaxAcceptableRttMs",
+                          "Upper bound RTT (ms) for delay penalty. "
+                          "Penalty clamped at 1 when RTT >= this value.",
+                          DoubleValue(100.0),
+                          MakeDoubleAccessor(&HarlTcpHandoverRewardApp::m_maxAcceptableRttMs),
                           MakeDoubleChecker<double>())
             .AddAttribute("TcpFailurePenalty",
                           "Reward penalty per step when TCP connection is dead. "
                           "Applied when g_tcpAlive is false (e.g., connection "
                           "failed mid-simulation or socket closed).",
-                          DoubleValue(0.5),
+                          DoubleValue(1.0),
                           MakeDoubleAccessor(&HarlTcpHandoverRewardApp::m_tcpFailurePenalty),
                           MakeDoubleChecker<double>())
             .AddAttribute("RlfPenalty",
                           "One-time reward penalty applied on the step when RLF "
                           "is detected (UAV drops from CONNECTED_NORMALLY after "
                           "TCP was established). Only fires once per episode.",
-                          DoubleValue(1.0),
+                          DoubleValue(2.0),
                           MakeDoubleAccessor(&HarlTcpHandoverRewardApp::m_rlfPenalty),
                           MakeDoubleChecker<double>())
-            .AddAttribute("PingPongPenalty",
-                          "Extra penalty per handover when consecutive handovers "
-                          "occur within PingPongInterval. Discourages ping-pong "
-                          "(rapid back-and-forth handovers).",
-                          DoubleValue(0.05),
-                          MakeDoubleAccessor(&HarlTcpHandoverRewardApp::m_pingPongPenalty),
-                          MakeDoubleChecker<double>())
-            .AddAttribute("PingPongInterval",
-                          "Minimum time (s) between handovers to avoid ping-pong penalty.",
-                          TimeValue(Seconds(1)),
-                          MakeTimeAccessor(&HarlTcpHandoverRewardApp::m_pingPongInterval),
+            .AddAttribute("CalculationInterval",
+                          "Interval (s) between reward calculations. Aligned with MS480 "
+                          "measurement report interval (480ms).",
+                          TimeValue(MilliSeconds(480)),
+                          MakeTimeAccessor(&HarlTcpHandoverRewardApp::m_calculationInterval),
                           MakeTimeChecker());
     return tid;
 }
@@ -133,19 +140,17 @@ HarlTcpHandoverRewardApp::RegisterCallbacks()
     // This captures every packet the UAV's TCP sender delivers to the sink.
     std::string rxPath = "/NodeList/" + std::to_string(m_remoteHostNodeId) +
                          "/ApplicationList/*/$ns3::PacketSink/Rx";
-    Config::ConnectWithoutContext(
-        rxPath,
-        MakeCallback(&HarlTcpHandoverRewardApp::ObserveSinkRx, this));
+    Config::ConnectWithoutContext(rxPath,
+                                  MakeCallback(&HarlTcpHandoverRewardApp::ObserveSinkRx, this));
 
     // Connect to TCP RTT trace on the UAV node
     // Schedule after TCP sockets are created (~1.0s)
-    uint32_t uavNodeId =
-        (g_uavContainer.GetN() > 0) ? g_uavContainer.Get(0)->GetId() : 0;
+    uint32_t uavNodeId = (g_uavContainer.GetN() > 0) ? g_uavContainer.Get(0)->GetId() : 0;
     if (uavNodeId > 0)
     {
         Simulator::Schedule(Seconds(1.5), [this, uavNodeId]() {
-            std::string rttPath = "/NodeList/" + std::to_string(uavNodeId) +
-                                  "/$ns3::TcpL4Protocol/SocketList/0/RTT";
+            std::string rttPath =
+                "/NodeList/" + std::to_string(uavNodeId) + "/$ns3::TcpL4Protocol/SocketList/0/RTT";
             Config::ConnectWithoutContext(
                 rttPath,
                 MakeCallback(&HarlTcpHandoverRewardApp::ObserveRtt, this));
@@ -155,7 +160,7 @@ HarlTcpHandoverRewardApp::RegisterCallbacks()
 
     // Initialize handover tracking and RTT baseline
     m_lastTotalHandovers = g_totalHandovers;
-    m_currentRttMs = static_cast<int32_t>(m_minRttMs);
+    m_currentRttMs = static_cast<int32_t>(m_delayMinRttMs);
 
     // Schedule first reward computation after apps start (~1.0s + margin)
     Simulator::Schedule(Seconds(1.5) + m_calculationInterval,
@@ -165,9 +170,9 @@ HarlTcpHandoverRewardApp::RegisterCallbacks()
     NS_LOG_INFO("HarlTcpHandoverRewardApp registered: interval="
                 << m_calculationInterval.GetMilliSeconds() << "ms"
                 << ", refRate=" << m_referenceRateBps << "bps"
-                << ", HOpenalty=" << m_handoverPenalty
-                << ", RttWeight=" << m_rttPenaltyWeight
-                << ", minRtt=" << m_minRttMs << "ms");
+                << ", minAcceptableGoodput=" << m_minimumAcceptableGoodputBps << "bps"
+                << ", delayMinRtt=" << m_delayMinRttMs << "ms"
+                << ", maxAcceptableRtt=" << m_maxAcceptableRttMs << "ms");
 }
 
 void
@@ -194,43 +199,51 @@ HarlTcpHandoverRewardApp::SendReward()
         goodputBps = static_cast<double>(m_sinkBytesReceived) * 8.0 / intervalSec;
     }
 
-    // --- 2. Normalize throughput to [0, 1] ---
+    // --- 2. Normalize throughput ---
+    //     goodput >= referenceRate             → 1.0
+    //     minAcceptable <= goodput < refRate    → 0..1 linearly
+    //     goodput < minAcceptable               → negative (0 at minAcceptable, -1 at 0 bps)
     double normGoodput = 0.0;
-    if (m_referenceRateBps > 0.0)
+    if (m_referenceRateBps > 0.0 && m_minimumAcceptableGoodputBps > 0.0)
     {
-        normGoodput = std::min(goodputBps / m_referenceRateBps, 1.0);
-    }
-
-    // --- 3. Count handovers since last reward ---
-    uint32_t handoverCount = g_totalHandovers - m_lastTotalHandovers;
-
-    // --- 3b. Ping-pong penalty: extra cost for handovers too close together ---
-    double pingPongTerm = 0.0;
-    if (handoverCount > 0)
-    {
-        Time now = Simulator::Now();
-        if (m_lastHandoverTime > Seconds(0) &&
-            now - m_lastHandoverTime < m_pingPongInterval)
+        if (goodputBps >= m_referenceRateBps)
         {
-            pingPongTerm = m_pingPongPenalty * handoverCount;
-            NS_LOG_DEBUG("Ping-pong: " << handoverCount << " handovers within "
-                          << m_pingPongInterval.GetSeconds() << "s of last handover, penalty="
-                          << pingPongTerm);
+            normGoodput = 1.0;
         }
-        m_lastHandoverTime = now;
+        else if (goodputBps >= m_minimumAcceptableGoodputBps)
+        {
+            normGoodput = (goodputBps - m_minimumAcceptableGoodputBps) /
+                          (m_referenceRateBps - m_minimumAcceptableGoodputBps);
+        }
+        else
+        {
+            normGoodput =
+                (goodputBps - m_minimumAcceptableGoodputBps) / m_minimumAcceptableGoodputBps;
+        }
     }
 
+    // --- 3. Compute delay penalty (self-normalized ramp, no weight multiplier) ---
+    //     rtt <= delayMinRtt    → 0.0
+    //     rtt >= maxAcceptableRtt → 1.0
+    //     delayMinRtt < rtt < maxRtt → linear 0..1
+    double rttPenalty = 0.0;
+    double rangeMs = m_maxAcceptableRttMs - m_delayMinRttMs;
+    if (rangeMs > 0.0)
+    {
+        if (m_currentRttMs >= m_maxAcceptableRttMs)
+        {
+            rttPenalty = 1.0;
+        }
+        else if (m_currentRttMs > m_delayMinRttMs)
+        {
+            rttPenalty = (m_currentRttMs - m_delayMinRttMs) / rangeMs;
+        }
+    }
+
+    // Keep track of handovers for logging only (no penalty)
     m_lastTotalHandovers = g_totalHandovers;
 
-    // --- 4. Compute RTT inflation penalty ---
-    double rttInflation = 0.0;
-    if (m_minRttMs > 0.0 && m_currentRttMs > m_minRttMs)
-    {
-        rttInflation = (m_currentRttMs - m_minRttMs) / m_minRttMs;
-    }
-    double rttPenalty = m_rttPenaltyWeight * rttInflation;
-
-    // --- 5. Apply TCP failure penalty ---
+    // --- 4. Apply TCP failure penalty ---
     double tcpPenalty = 0.0;
     if (!g_tcpAlive)
     {
@@ -247,23 +260,24 @@ HarlTcpHandoverRewardApp::SendReward()
         NS_LOG_DEBUG("RLF detected, applying penalty: " << m_rlfPenalty);
     }
 
-    // --- 7. Compute reward ---
-    double reward = normGoodput - (m_handoverPenalty * handoverCount) - rttPenalty - tcpPenalty - rlfTerm - pingPongTerm;
+    // --- 5. Compute reward ---
+    double reward = normGoodput - rttPenalty; // removing tcp penalty and rlf term for now should be captured by throughput/rtt
 
     // Wide clamp as safety net only (should not trigger after scaling)
     reward = std::max(reward, -100.0);
 
     NS_LOG_INFO("Reward: goodput=" << goodputBps << "bps"
-                << " (" << (normGoodput * 100.0) << "%)"
-                << " rtt=" << m_currentRttMs << "ms"
-                << " rttInflation=" << rttInflation
-                << " rttPenalty=" << rttPenalty
-                << " handovers=" << handoverCount
-                << " hoPenalty=" << (m_handoverPenalty * handoverCount)
-                << " pingPong=" << pingPongTerm
-                << " reward=" << reward);
+                                   << " normGoodput=" << normGoodput << " rtt=" << m_currentRttMs
+                                   << "ms"
+                                   << " rttPenalty=" << rttPenalty << " tcpPenalty=" << tcpPenalty
+                                   << " rlfTerm=" << rlfTerm << " reward=" << reward);
 
-    // --- 7. Send reward to agent ---
+    // std::cout << "Reward: goodput=" << goodputBps << "bps"
+    //           << " normGoodput=" << normGoodput << " rtt=" << m_currentRttMs << "ms"
+    //           << " rttPenalty=" << rttPenalty << " tcpPenalty=" << tcpPenalty
+    //           << " rlfTerm=" << rlfTerm << " reward=" << reward << std::endl;
+
+    // --- 6. Send reward to agent ---
     auto rewardContainer = MakeDictBoxContainer<double>(1, "reward", reward);
     Send(rewardContainer);
 
@@ -271,9 +285,7 @@ HarlTcpHandoverRewardApp::SendReward()
     m_sinkBytesReceived = 0;
 
     // Schedule next reward computation
-    Simulator::Schedule(m_calculationInterval,
-                        &HarlTcpHandoverRewardApp::SendReward,
-                        this);
+    Simulator::Schedule(m_calculationInterval, &HarlTcpHandoverRewardApp::SendReward, this);
 }
 
 } // namespace ns3

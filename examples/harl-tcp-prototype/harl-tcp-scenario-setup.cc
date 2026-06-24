@@ -2,8 +2,9 @@
  * Setup file for the HARL TCP Scenario
  * Supports two topologies:
  *   "simple"  — 2 eNodeBs on a line, UAV shuttles between them
- *   "hexgrid" — hexagonal grid of 3-sector macro sites, UAV follows a helix
- * 1 aerial UE, 1 remote server. The UE runs a TCP BulkSendApplication to the remote server.
+ *   "hexgrid" — hexagonal grid of 3-sector macro sites, UAV follows ascend-random or
+ * random-waypoint 1 aerial UE, 1 remote server. The UE runs a TCP BulkSendApplication to the remote
+ * server.
  */
 
 #include "handover/harl-tcp-handover-act-app.h"
@@ -77,14 +78,13 @@ NotifyConnectionFailed(Ptr<Socket> socket, const Address& local, const Address& 
 }
 
 void
-NotifyTcpStateChange(const TcpSocket::TcpStates_t oldState,
-                     const TcpSocket::TcpStates_t newState)
+NotifyTcpStateChange(const TcpSocket::TcpStates_t oldState, const TcpSocket::TcpStates_t newState)
 {
     if (newState == TcpSocket::CLOSED || newState == TcpSocket::LAST_ACK)
     {
         g_tcpAlive = false;
-        std::cout << "TCP socket closed (state=" << newState
-                  << ") at time " << Simulator::Now().GetSeconds() << "s" << std::endl;
+        std::cout << "TCP socket closed (state=" << newState << ") at time "
+                  << Simulator::Now().GetSeconds() << "s" << std::endl;
     }
 }
 
@@ -152,16 +152,15 @@ UavRrcStateChange(std::string context,
     {
         return;
     }
-    std::cout << "RRC state change for UE " << imsi << ", RNTI " << rnti << ": " << oldState
-              << " -> " << newState << " at time " << Simulator::Now().GetSeconds() << "s"
-              << std::endl;
+    // std::cout << "RRC state change for UE " << imsi << ", RNTI " << rnti << ": " << oldState
+    //           << " -> " << newState << " at time " << Simulator::Now().GetSeconds() << "s"
+    //           << std::endl;
     g_currentRnti = rnti; // Update the global RNTI for the UAV UE
     g_currentCellId = cellId;
 
     // Detect RLF: UE drops from CONNECTED_NORMALLY to a non-connected state
     // (not due to a handover, which transitions through CONNECTED_HANDOVER).
-    if (oldState == LteUeRrc::CONNECTED_NORMALLY &&
-        newState != LteUeRrc::CONNECTED_HANDOVER &&
+    if (oldState == LteUeRrc::CONNECTED_NORMALLY && newState != LteUeRrc::CONNECTED_HANDOVER &&
         g_tcpConnected)
     {
         g_rlfTriggered = true;
@@ -173,14 +172,19 @@ UavRrcStateChange(std::string context,
 void
 HandoverOk(const uint64_t imsi, const uint16_t cellId, const uint16_t rnti)
 {
-    std::cout << "Handover OK for UE " << imsi << ", RNTI " << rnti << " to cell " << cellId
-              << " at time " << Simulator::Now().GetSeconds() << "s" << std::endl;
-    g_totalHandovers++;
     g_handoverInProgress = false;
     if (g_logging)
     {
+        std::cout << "Handover OK for UE " << imsi << ", RNTI " << rnti << " to cell " << cellId
+                  << " at time " << Simulator::Now().GetSeconds() << "s" << std::endl;
         std::ofstream hoFile(g_outputDir + "harl-tcp-handovers.csv", std::ios_base::app);
         hoFile << Simulator::Now().GetSeconds() << "," << cellId << std::endl;
+    }
+
+    // only increment when not using the rl app
+    if (rlMode == false)
+    {
+        g_totalHandovers++;
     }
 }
 
@@ -227,7 +231,7 @@ void
 ReportPhyTransmissionStatParameter(PhyTransmissionStatParameters param)
 {
     std::ofstream mcsFile(g_outputDir + "mcs.csv", std::ios_base::app);
-    mcsFile << Simulator::Now().GetSeconds() << "," << (int)param.m_mcs << std::endl;
+    mcsFile << Simulator::Now().GetSeconds() << "," << (int)param.m_mcs << "," << (int)param.m_size << std::endl;
 }
 
 void
@@ -275,7 +279,8 @@ SourceRetransmissionPacket(const Ptr<const Packet> packet,
     if (g_logging)
     {
         std::ofstream retransmissionFile(g_outputDir + "retransmissions.csv", std::ios_base::app);
-        retransmissionFile << Simulator::Now().GetSeconds() << "," << packet->GetSize() << std::endl;
+        retransmissionFile << Simulator::Now().GetSeconds() << "," << packet->GetSize()
+                           << std::endl;
     }
 }
 
@@ -326,11 +331,10 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
               uint32_t runId = 0,
               std::string trialName = "1",
               std::string tcpVariant = "TcpBbr",
-              std::string uavMobility = "random-mobility",
+              std::string uavMobility = "ascend-random",
               std::string topology = "hexgrid",
               double startHeight = 80.0,
               double endHeight = 300.0,
-              double helixRadius = 80.0,
               uint32_t bbrWindowLength = 10,
               uint32_t addStaticUes = 0,
               bool fullBufferInterference = false,
@@ -338,17 +342,22 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
               bool logging = true,
               bool rlMode = false,
               std::string handoverAlgorithm = "a3",
-              uint32_t stepTime = 100,
+              uint32_t stepTime = 240,
               uint32_t delay = 0,
               double handoverPenalty = 0.1,
-              double referenceRateBps = 50000000.0,
-              double rttPenaltyWeight = 0.2,
-              double minRttMs = 30.0,
+              double referenceRateBps = 5000000.0,
+              double minAcceptableGoodputBps = 2500000.0,
+              double delayMinRttMs = 55.0,
+              double minAcceptableRttMs = 100.0,
               double tcpFailurePenalty = 5.0,
               double rlfPenalty = 10.0,
               double handoverMargin = 3.0)
 {
     g_outputDir = pathToNs3 + "/contrib/defiance/examples/harl-tcp-prototype/output/";
+
+    // Seed RNG before any random operations
+    RngSeedManager::SetSeed(seed == 0U ? time(nullptr) : seed);
+    RngSeedManager::SetRun(runId == 0U ? 1 : runId);
 
     // Clear data files
     if (logging)
@@ -426,18 +435,21 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
     // Aerial UEs (high RSRP, moderate RSRQ due to LOS interference) fall into the
     // medium zone, which uses a subset of RBs and lower UL power. This reduces
     // their interference to adjacent cells by 4-5 dB.
-    lteHelper->SetFfrAlgorithmType("ns3::LteFfrSoftAlgorithm");
-    lteHelper->SetFfrAlgorithmAttribute("CenterRsrqThreshold", UintegerValue(30));
-    lteHelper->SetFfrAlgorithmAttribute("EdgeRsrqThreshold", UintegerValue(25));
-    lteHelper->SetFfrAlgorithmAttribute("CenterAreaPowerOffset",
-                                        UintegerValue(LteRrcSap::PdschConfigDedicated::dB_6));
-    lteHelper->SetFfrAlgorithmAttribute("MediumAreaPowerOffset",
-                                        UintegerValue(LteRrcSap::PdschConfigDedicated::dB_1dot77));
-    lteHelper->SetFfrAlgorithmAttribute("EdgeAreaPowerOffset",
-                                        UintegerValue(LteRrcSap::PdschConfigDedicated::dB3));
-    lteHelper->SetFfrAlgorithmAttribute("CenterAreaTpc", UintegerValue(1));
-    lteHelper->SetFfrAlgorithmAttribute("MediumAreaTpc", UintegerValue(2));
-    lteHelper->SetFfrAlgorithmAttribute("EdgeAreaTpc", UintegerValue(3));
+    // lteHelper->SetFfrAlgorithmType("ns3::LteFfrSoftAlgorithm");
+    lteHelper->SetFfrAlgorithmType("ns3::LteFrNoOpAlgorithm");
+//     lteHelper->SetFfrAlgorithmAttribute("CenterRsrqThreshold", UintegerValue(15)); // Default
+//     lteHelper->SetFfrAlgorithmAttribute("EdgeRsrqThreshold", UintegerValue(8)); // Default
+//     lteHelper->SetFfrAlgorithmAttribute("UlCommonSubBandwidth", UintegerValue(100));
+//    lteHelper->SetFfrAlgorithmAttribute("UlEdgeSubBandwidth", UintegerValue(0));
+//     lteHelper->SetFfrAlgorithmAttribute("CenterAreaPowerOffset",
+//                                         UintegerValue(LteRrcSap::PdschConfigDedicated::dB_6));
+//     lteHelper->SetFfrAlgorithmAttribute("MediumAreaPowerOffset",
+//                                         UintegerValue(LteRrcSap::PdschConfigDedicated::dB_1dot77));
+//     lteHelper->SetFfrAlgorithmAttribute("EdgeAreaPowerOffset",
+//                                         UintegerValue(LteRrcSap::PdschConfigDedicated::dB3));
+//     lteHelper->SetFfrAlgorithmAttribute("CenterAreaTpc", UintegerValue(1));
+//     lteHelper->SetFfrAlgorithmAttribute("MediumAreaTpc", UintegerValue(2));
+//     lteHelper->SetFfrAlgorithmAttribute("EdgeAreaTpc", UintegerValue(3));
 
     // ---- LTE device configuration -------------------------------------- //
     double enbTxPowerDbm = 49.0; // dBm, corresponds to 10W, typical for macro eNodeBs
@@ -510,6 +522,9 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
         NS_FATAL_ERROR("Unknown TCP variant: " << tcpVariant);
     }
 
+    // Set TCP ConnTimeout to be shorter, for quicker establishment (default 3s)
+    Config::SetDefault("ns3::TcpSocket::ConnTimeout", TimeValue(Seconds(1)));
+
     Ptr<Node> pgw = epcHelper->GetPgwNode();
 
     g_remoteHostContainer.Create(1);
@@ -555,57 +570,55 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
 
         lteHelper->AddX2Interface(g_enbContainer);
 
-        // ---- UAV helix mobility (hexgrid) ------------------------------ //
+        // ---- UAV mobility (hexgrid) ------------------------------------ //
         BoundingBox bbox = ComputeEnbBoundingBox(g_enbContainer, intersiteDistance * 0.2);
         double uavCenterY = (bbox.minY + bbox.maxY) / 2.0;
-        double midX = (bbox.minX + bbox.maxX) / 2.0;
-        double halfSpanX = helixRadius;
 
-        if (uavMobility == "helix")
+        if (uavMobility == "ascend-random")
         {
-            double startZ = startHeight;
-            double endZ = endHeight;
+            // Phase 1: Ascend from ground (1.5m) to startHeight, then Phase 2: random-waypoint.
+            // TCP connects reliably because the UAV stays at 1.5m (near eNB antenna) during dwell,
+            // then ascends through the main lobe.
             double dwellTime = 2.0;
-            double totalTravelDist = ueSpeed * (simDuration - dwellTime);
+            Ptr<UniformRandomVariable> rbx = CreateObject<UniformRandomVariable>();
+            rbx->SetAttribute("Min", DoubleValue(bbox.minX));
+            rbx->SetAttribute("Max", DoubleValue(bbox.maxX));
+            Ptr<UniformRandomVariable> rby = CreateObject<UniformRandomVariable>();
+            rby->SetAttribute("Min", DoubleValue(bbox.minY));
+            rby->SetAttribute("Max", DoubleValue(bbox.maxY));
+            Ptr<UniformRandomVariable> rbz = CreateObject<UniformRandomVariable>();
+            rbz->SetAttribute("Min", DoubleValue(startHeight));
+            rbz->SetAttribute("Max", DoubleValue(endHeight));
+
+            Vector startPos(rbx->GetValue(), rby->GetValue(), 1.5);
 
             Ptr<WaypointMobilityModel> wpMob = CreateObject<WaypointMobilityModel>();
             g_uavContainer.Get(0)->AggregateObject(wpMob);
 
-            const double dTheta = 2.0 * M_PI / 16.0;
-            double cumDist = 0.0;
-            double theta = 0.0;
+            // Phase 1: dwell at 1.5m, then ascend to startHeight
+            wpMob->AddWaypoint(Waypoint(Seconds(0.0), startPos));
+            wpMob->AddWaypoint(Waypoint(Seconds(dwellTime), startPos));
+            double ascentTime = (startHeight - 1.5) / ueSpeed;
+            Vector ascentEnd(startPos.x, startPos.y, startHeight);
+            wpMob->AddWaypoint(Waypoint(Seconds(dwellTime + ascentTime), ascentEnd));
 
-            double x0 = midX - halfSpanX * std::cos(theta);
-            double y0 = uavCenterY + helixRadius * std::sin(theta);
-            double z0 = startZ;
-            Vector prev(x0, y0, z0);
-            wpMob->AddWaypoint(Waypoint(Seconds(0.0), prev));
-            wpMob->AddWaypoint(Waypoint(Seconds(dwellTime), prev));
-
-            while (cumDist < totalTravelDist)
+            // Phase 2: random waypoints
+            Vector currentPos = ascentEnd;
+            double currentTime = dwellTime + ascentTime;
+            while (currentTime < simDuration)
             {
-                theta += dTheta;
-                double frac = cumDist / totalTravelDist;
-                double x = midX - halfSpanX * std::cos(theta);
-                double y = uavCenterY + helixRadius * std::sin(theta);
-                double z = startZ + (endZ - startZ) * std::min(frac, 1.0);
-                Vector pos(x, y, z);
-
-                double segLen = CalculateDistance(pos, prev);
-                double newCum = cumDist + segLen;
-                double time =
-                    (newCum > totalTravelDist) ? simDuration : dwellTime + newCum / ueSpeed;
-
-                wpMob->AddWaypoint(Waypoint(Seconds(time), pos));
-                cumDist = newCum;
-                prev = pos;
+                Vector nextPos;
+                double dist;
+                do
+                {
+                    nextPos = Vector(rbx->GetValue(), rby->GetValue(), rbz->GetValue());
+                    dist = CalculateDistance(currentPos, nextPos);
+                } while (dist < 20.0 || dist > 100.0);
+                double travelTime = dist / ueSpeed;
+                currentTime += travelTime;
+                wpMob->AddWaypoint(Waypoint(Seconds(currentTime), nextPos));
+                currentPos = nextPos;
             }
-
-            // std::cout << "Helix path: X=[" << midX - halfSpanX << ", " << midX + halfSpanX
-            //           << "], Y ~" << uavCenterY << " +/-" << helixRadius << ", Z=[" << startZ
-            //           << ", " << endZ << "]"
-            //           << ", speed=" << ueSpeed << " m/s, travelDist=" << totalTravelDist
-            //           << " m, arc=" << cumDist << " m" << std::endl;
         }
         else if (uavMobility == "random-waypoint")
         {
@@ -620,9 +633,7 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
             rbz->SetAttribute("Min", DoubleValue(startHeight));
             rbz->SetAttribute("Max", DoubleValue(endHeight));
 
-            Vector startPos((bbox.minX + bbox.maxX) / 2.0,
-                            (bbox.minY + bbox.maxY) / 2.0,
-                            startHeight);
+            Vector startPos(rbx->GetValue(), rby->GetValue(), startHeight);
             Ptr<WaypointMobilityModel> wpMob = CreateObject<WaypointMobilityModel>();
             g_uavContainer.Get(0)->AggregateObject(wpMob);
             wpMob->AddWaypoint(Waypoint(Seconds(0.0), startPos));
@@ -646,7 +657,8 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
                 currentPos = nextPos;
             }
 
-            // std::cout << "Random waypoint path: bounding box X=[" << bbox.minX << ", " << bbox.maxX
+            // std::cout << "Random waypoint path: bounding box X=[" << bbox.minX << ", " <<
+            // bbox.maxX
             //           << "], Y=[" << bbox.minY << ", " << bbox.maxY << "], Z=[" << startHeight
             //           << ", " << endHeight << "], speed=" << ueSpeed << " m/s" << std::endl;
         }
@@ -657,7 +669,7 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
             uavMob.Install(g_uavContainer);
             Ptr<ConstantPositionMobilityModel> uavPos =
                 g_uavContainer.Get(0)->GetObject<ConstantPositionMobilityModel>();
-            uavPos->SetPosition(Vector(midX - halfSpanX, uavCenterY, startHeight));
+            uavPos->SetPosition(Vector((bbox.minX + bbox.maxX) / 2.0, uavCenterY, startHeight));
         }
     }
     else // "simple"
@@ -678,20 +690,46 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
         double endX = intersiteDistance * 0.7;
         double uavY = 0.0;
 
-        if (uavMobility == "helix")
+        if (uavMobility == "ascend-random")
         {
-            Ptr<WaypointMobilityModel> uavMob = CreateObject<WaypointMobilityModel>();
-            g_uavContainer.Get(0)->AggregateObject(uavMob);
-            double legDistance = endX - startX;
-            uavMob->AddWaypoint(Waypoint(Seconds(0.0), Vector(startX, uavY, startHeight)));
+            BoundingBox bbox = ComputeEnbBoundingBox(g_enbContainer, intersiteDistance * 0.2);
+            double dwellTime = 2.0;
+            Ptr<UniformRandomVariable> rbx = CreateObject<UniformRandomVariable>();
+            rbx->SetAttribute("Min", DoubleValue(bbox.minX));
+            rbx->SetAttribute("Max", DoubleValue(bbox.maxX));
+            Ptr<UniformRandomVariable> rby = CreateObject<UniformRandomVariable>();
+            rby->SetAttribute("Min", DoubleValue(bbox.minY));
+            rby->SetAttribute("Max", DoubleValue(bbox.maxY));
+            Ptr<UniformRandomVariable> rbz = CreateObject<UniformRandomVariable>();
+            rbz->SetAttribute("Min", DoubleValue(startHeight));
+            rbz->SetAttribute("Max", DoubleValue(endHeight));
 
-            double totalTravelDistance = simDuration * ueSpeed;
-            uint32_t numLegs = static_cast<uint32_t>(std::ceil(totalTravelDistance / legDistance));
-            for (uint32_t i = 1; i <= numLegs; ++i)
+            Vector ground((bbox.minX + bbox.maxX) / 2.0, (bbox.minY + bbox.maxY) / 2.0, 1.5);
+
+            Ptr<WaypointMobilityModel> wpMob = CreateObject<WaypointMobilityModel>();
+            g_uavContainer.Get(0)->AggregateObject(wpMob);
+
+            wpMob->AddWaypoint(Waypoint(Seconds(0.0), ground));
+            wpMob->AddWaypoint(Waypoint(Seconds(dwellTime), ground));
+            double ascentTime = (startHeight - 1.5) / ueSpeed;
+            Vector ascentEnd(ground.x, ground.y, startHeight);
+            wpMob->AddWaypoint(Waypoint(Seconds(dwellTime + ascentTime), ascentEnd));
+
+            Vector currentPos = ascentEnd;
+            double currentTime = dwellTime + ascentTime;
+            while (currentTime < simDuration * 2)
             {
-                double time = i * simDuration / numLegs;
-                double xPos = (i % 2 == 0) ? startX : endX;
-                uavMob->AddWaypoint(Waypoint(Seconds(time), Vector(xPos, uavY, startHeight)));
+                Vector nextPos;
+                double dist;
+                do
+                {
+                    nextPos = Vector(rbx->GetValue(), rby->GetValue(), rbz->GetValue());
+                    dist = CalculateDistance(currentPos, nextPos);
+                } while (dist < 20.0 || dist > 100.0);
+                double travelTime = dist / ueSpeed;
+                currentTime += travelTime;
+                wpMob->AddWaypoint(Waypoint(Seconds(currentTime), nextPos));
+                currentPos = nextPos;
             }
         }
         else if (uavMobility == "random-waypoint")
@@ -748,9 +786,6 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
             uavPos->SetPosition(Vector(startX, uavY, startHeight));
         }
     }
-
-    RngSeedManager::SetSeed(seed == 0U ? time(nullptr) : seed);
-    RngSeedManager::SetRun(runId == 0U ? 1 : runId);
 
     Config::SetDefault("ns3::LteEnbPhy::TxPower", DoubleValue(46.0));
     Config::SetDefault("ns3::LteUePhy::TxPower", DoubleValue(23.0));
@@ -921,7 +956,8 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
             }
             g_staticUeContainer.Get(i)->GetObject<MobilityModel>()->SetPosition(
                 Vector(x, y, ueHeight));
-            // std::cout << "Static UE " << i << " position: (" << x << ", " << y << ", " << ueHeight
+            // std::cout << "Static UE " << i << " position: (" << x << ", " << y << ", " <<
+            // ueHeight
             //           << ")" << std::endl;
         }
         // std::cout << "Static UEs: " << numAerial << " aerial, " << (addStaticUes - numAerial)
@@ -962,7 +998,8 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
 
     // Add measurement configuration
     LteRrcSap::ReportConfigEutra reportConfig;
-    reportConfig.reportInterval = LteRrcSap::ReportConfigEutra::MS120;
+    reportConfig.reportInterval =
+        LteRrcSap::ReportConfigEutra::MS240; // Aligned with step, reward, and observation cadence
     for (auto it = g_enbLteDevs.Begin(); it != g_enbLteDevs.End(); ++it)
     {
         Ptr<NetDevice> netDevice = *it;
@@ -1030,8 +1067,7 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
 
         std::string tcpStatePath =
             "/NodeList/" + std::to_string(uavNodeId) + "/$ns3::TcpL4Protocol/SocketList/0/State";
-        Config::ConnectWithoutContext(tcpStatePath,
-                                      MakeCallback(&NotifyTcpStateChange));
+        Config::ConnectWithoutContext(tcpStatePath, MakeCallback(&NotifyTcpStateChange));
     });
 
     if (logging)
@@ -1111,12 +1147,15 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
     {
         uint32_t numBs = g_enbContainer.GetN();
         uint32_t uavNodeId = g_uavContainer.Get(0)->GetId();
-        g_lastRsrpValues.resize(numBs + 1, -1); // index by cellId (1-based)
+        g_lastRsrpValues.resize(numBs + 1, -140.0); // index by cellId (1-based), dBm
+        g_lastSinrValues.resize(numBs + 1, -40.0);  // index by cellId (1-based), -40dB = unknown
+        g_lastRsrqValues.resize(numBs + 1, -20.0); // index by cellId (1-based), dB
 
         // std::cout << "Installing RL handover apps (NumBs=" << numBs << ", StepTime=" << stepTime
         //           << "ms"
         //           << ", delay=" << delay << "ms"
-        //           << ", handoverPenalty=" << handoverPenalty << ", uavNodeId=" << uavNodeId << ")"
+        //           << ", handoverPenalty=" << handoverPenalty << ", uavNodeId=" << uavNodeId <<
+        //           ")"
         //           << std::endl;
 
         uint32_t remoteHostNodeId = g_remoteHostContainer.Get(0)->GetId();
@@ -1127,10 +1166,13 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
         rlAppHelper.SetAttribute("RemoteHostNodeId", UintegerValue(remoteHostNodeId));
         rlAppHelper.SetAttribute("HandoverPenalty", DoubleValue(handoverPenalty));
         rlAppHelper.SetAttribute("ReferenceRate", DoubleValue(referenceRateBps));
-        rlAppHelper.SetAttribute("RttPenaltyWeight", DoubleValue(rttPenaltyWeight));
-        rlAppHelper.SetAttribute("MinRttMs", DoubleValue(minRttMs));
+        rlAppHelper.SetAttribute("MinimumAcceptableGoodput", DoubleValue(minAcceptableGoodputBps));
+        rlAppHelper.SetAttribute("DelayMinRttMs", DoubleValue(delayMinRttMs));
+        rlAppHelper.SetAttribute("MaxAcceptableRttMs", DoubleValue(minAcceptableRttMs));
         rlAppHelper.SetAttribute("TcpFailurePenalty", DoubleValue(tcpFailurePenalty));
         rlAppHelper.SetAttribute("RlfPenalty", DoubleValue(rlfPenalty));
+        rlAppHelper.SetAttribute("CalculationInterval",
+                                 TimeValue(MilliSeconds(stepTime))); // Match UE PHY measurement period
         auto rewardApps = rlAppHelper.Install(g_uavContainer.Get(0));
 
         rlAppHelper.SetTypeId(HarlTcpHandoverAgentApp::GetTypeId());
@@ -1143,6 +1185,8 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
         rlAppHelper.SetAttribute("StartTime", TimeValue(Seconds(0.5)));
         rlAppHelper.SetAttribute("NumBs", UintegerValue(numBs));
         rlAppHelper.SetAttribute("UavNodeId", UintegerValue(uavNodeId));
+        rlAppHelper.SetAttribute("StepTimeMs", UintegerValue(stepTime));
+        rlAppHelper.SetAttribute("HandoverMargin", DoubleValue(handoverMargin));
         auto obsApps = rlAppHelper.Install(g_uavContainer.Get(0));
 
         rlAppHelper.SetTypeId(HarlTcpHandoverActionApp::GetTypeId());

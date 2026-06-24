@@ -19,8 +19,8 @@ extern Ptr<LteHelper> g_lteHelper;
 extern uint32_t g_totalHandovers;
 extern bool g_tcpConnected;
 extern bool g_handoverInProgress;
-extern std::vector<int32_t> g_lastRsrpValues;
-extern std::vector<double> g_lastSinrValues;
+extern std::vector<double> g_lastRsrpValues;
+extern std::vector<double> g_lastRsrqValues;
 
 namespace ns3
 {
@@ -224,17 +224,16 @@ HarlTcpHandoverActionApp::ExecuteAction(uint32_t remoteAppId, Ptr<OpenGymDictCon
         return;
     }
 
-    // --- Precondition: Apply handover margin ---
-    // Only handover if target cell RSRP > serving cell RSRP + margin.
-    // RSRP values are in 3GPP range (0-97, -44 to -140 dBm mapping).
+    // --- Precondition: Apply handover margin (handled by action_mask in obs app,
+    // kept here for safety when margin is disabled or mask is bypassed).
     if (m_handoverMargin > -999.0 && newCellId < g_lastRsrpValues.size() &&
         currentCellId < g_lastRsrpValues.size())
     {
         double servingRsrp = g_lastRsrpValues[currentCellId];
         double targetRsrp = g_lastRsrpValues[newCellId];
 
-        // Block if either RSRP is unknown (-1) — no measurement available
-        if (servingRsrp < 0 || targetRsrp < 0)
+        // Block if either RSRP is unknown (-200 sentinel) — no measurement available
+        if (servingRsrp < -135.0 || targetRsrp < -135.0)
         {
             NS_LOG_DEBUG("Handover blocked: RSRP unknown (serving=" << servingRsrp
                           << " target=" << targetRsrp << ")");
@@ -256,12 +255,12 @@ HarlTcpHandoverActionApp::ExecuteAction(uint32_t remoteAppId, Ptr<OpenGymDictCon
     std::cout << "Time: " << Simulator::Now().GetSeconds() << "s: Handover UE RNTI=" << rnti
               << " cell " << currentCellId
               << " rsrp_curr: " << g_lastRsrpValues[currentCellId]
-              << " sinr_curr: " << (currentCellId < g_lastSinrValues.size()
-                                         ? g_lastSinrValues[currentCellId] : -40.0)
+              << " rsrq_curr: " << (currentCellId < g_lastRsrqValues.size()
+                                         ? g_lastRsrqValues[currentCellId] : -200.0)
               << " -> " << newCellId
               << " rsrp_target: " << g_lastRsrpValues[newCellId]
-              << " sinr_target: " << (newCellId < g_lastSinrValues.size()
-                                          ? g_lastSinrValues[newCellId] : -40.0)
+              << " rsrq_target: " << (newCellId < g_lastRsrqValues.size()
+                                           ? g_lastRsrqValues[newCellId] : -200.0)
               << std::endl;
 
     g_handoverInProgress = true;

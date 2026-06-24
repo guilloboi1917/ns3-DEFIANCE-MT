@@ -86,6 +86,8 @@ def main(argv=None):
     cwnd = pd.read_csv(CWND_FILE, header=None, names=["time", "cwnd"])
     # Multiple CWND updates can happen at the same timestamp (burst of ACKs).
     # Keep only the last value per timestamp to avoid vertical line artifacts.
+    # Filter out any values larger than uint32 max (shouldn't happen, but just in case of logging bugs).
+    cwnd = cwnd[cwnd["cwnd"] <= 4 * 1024 * 1024]  # 4 GB in bytes, well above any reasonable CWND
     cwnd = cwnd.drop_duplicates(subset="time", keep="last").sort_values("time")
 
     ho = pd.read_csv(HO_FILE, header=None, names=["time", "cellId"]) \
@@ -119,6 +121,9 @@ def main(argv=None):
         # Use rolling average
         rsrp_sinr["sinr"] = rsrp_sinr["sinr"].rolling(window=20, min_periods=1).median()
 
+        # Apply a ewma to rsrp
+        rsrp_sinr["rsrp_ewma"] = rsrp_sinr["rsrp"].ewm(alpha=0.005, adjust=False).mean()
+
     ul_sinr = pd.read_csv(UL_SINR_FILE, header=None, names=["time", "cellId", "rnti", "sinr"]) \
         if os.path.exists(UL_SINR_FILE) else None
 
@@ -126,7 +131,7 @@ def main(argv=None):
                            names=["time", "cellId", "rnti", "txPowerDbm"]) \
         if os.path.exists(TX_POWER_FILE) else None
 
-    mcs = pd.read_csv(MSC_FILE, header=None, names=["time", "mcs"]) \
+    mcs = pd.read_csv(MSC_FILE, header=None, names=["time", "mcs", "tbs"]) \
         if os.path.exists(MSC_FILE) else None
 
     # Transport block sizes (in bits) for each MCS index (0-28) based on 100 PRB allocation
@@ -154,6 +159,9 @@ def main(argv=None):
     # ── 4x2 layout ──────────────────────────────────────────────────────
     fig, axes = plt.subplots(4, 2, figsize=(12, 10), sharex=True)
     (ax1, ax2), (ax3, ax4), (ax5, ax6), (ax7, ax8) = axes
+
+    for ax in axes.flatten():
+        ax.minorticks_on()
 
     all_times = [cwnd["time"].max()]
     if rtt is not None:
@@ -216,6 +224,8 @@ def main(argv=None):
         ax4.step(mcs["time"], mcs["theoretical_rate"], linewidth=1.0,
                  color="tab:cyan", label="Theoretical Max Rate")
         ax4.legend(fontsize=8)
+        ax4.step(mcs["time"], mcs["tbs"] / 125, linewidth=0.8, color="tab:orange", 
+                 label="Transport Block Size (bits)", alpha=0.7)
 
     # ═══════════════════════════════════════════════════════════════════
     # (3,1) MCS Index + UE TX Power
@@ -293,7 +303,13 @@ def main(argv=None):
         ax8.set_ylabel("Retransmissions (count)")
     ax8.set_title("Retransmissions (200 ms bins)")
     ax8.grid(True)
-
+    # if rsrp_sinr is not None and not rsrp_sinr.empty:
+    #     ax8.plot(rsrp_sinr["time"], rsrp_sinr["rsrp"], linewidth=0.8, color="tab:orange")
+    #     ax8.set_ylabel("RSRP (dBm)")
+    #     ax8.grid(True)
+    #     # twinx for SINR
+    #     ax8.plot(rsrp_sinr["time"], rsrp_sinr["rsrp_ewma"], linewidth=0.7,
+    #               color="tab:red", linestyle="--", alpha=0.7, label="RSRP EWMA")
     # ═══════════════════════════════════════════════════════════════════
     # Handover markers on all axes
     # ═══════════════════════════════════════════════════════════════════

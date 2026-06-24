@@ -7,6 +7,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+import gymnasium as gym
 import numpy as np
 import ray
 try:
@@ -18,8 +19,12 @@ except ImportError:
 from ns3ai_gym_env.envs.ns3_multi_agent_environment import Ns3MultiAgentEnv
 from ray.air.integrations.wandb import WandbLoggerCallback
 from ray.rllib.algorithms import AlgorithmConfig
+from ray.rllib.algorithms.algorithm import Algorithm
 from ray.rllib.connectors.env_to_module import FlattenObservations
-from ray.rllib.policy.policy import Policy
+from ray.rllib.core.rl_module.rl_module import RLModule, RLModuleSpec
+from ray.rllib.examples.rl_modules.classes.action_masking_rlm import (
+    ActionMaskingTorchRLModule,
+)
 from ray.tune import Tuner, register_env
 from ray.tune.impl.config import CheckpointConfig, RunConfig
 from ray.tune.registry import get_trainable_cls
@@ -35,76 +40,145 @@ from defiance.utils import first
 logger = logging.getLogger(__name__)
 
 
+def _checkpoint_uses_rl_module(ckpt_path: Path) -> bool:
+    """Detect whether the checkpoint uses the new RLModule API stack (PPO)
+    or the old Policy API stack (DQN/D3QN).
+
+    New stack (enable_rl_module_and_learner=True): has learner_group/
+    Old stack (enable_rl_module_and_learner=False): has policies/
+    """
+    return (ckpt_path / "learner_group").exists()
+
+
 def start_inference(env_name: str, load_checkpoint_path: str | Path, **ns3_settings: str) -> None:
     load_checkpoint_path = Path(load_checkpoint_path)
     if not load_checkpoint_path.exists():
-        msg = "load_checkpoint_path is required for inference"
-        raise ValueError(msg)
+        raise ValueError(f"load_checkpoint_path does not exist: {load_checkpoint_path}")
 
-    if (load_checkpoint_path / "best_checkpoint").exists():
-        policies = Policy.from_checkpoint(str(load_checkpoint_path / "best_checkpoint"))
+    # Resolve path: experiment dir with best_checkpoint/ or direct checkpoint dir
+    ckpt_path = (
+        load_checkpoint_path / "best_checkpoint"
+        if (load_checkpoint_path / "best_checkpoint").exists()
+        else load_checkpoint_path
+    )
+
+    # Create environment and restore checkpoint
+    env = Ns3MultiAgentEnv(
+        targetName=env_name,
+        ns3Path=NS3_HOME,
+        ns3Settings=ns3_settings,
+        trial_name="inference",
+    )
+    obs, info = env.reset()
+    agent_id = first(obs)
+
+    episode_reward = 0.0
+    step_count = 0
+    done = False
+
+    # ── Restore checkpoint and run inference ──────────────────────────
+    if _checkpoint_uses_rl_module(ckpt_path):
+        # === New RLModule API stack (PPO with optional action masking) ===
+        module_path = ckpt_path / "learner_group" / "learner" / "rl_module" / agent_id
+        module = RLModule.from_checkpoint(str(module_path))
+        module.eval()
+
+        # Determine if module uses action masking by checking the loaded module type
+        is_action_masking = "ActionMasking" in type(module).__name__
+
+        # If using action masking, recreate env with the flag enabled
+        if is_action_masking:
+            ns3_settings["useActionMasking"] = "true"
+            env.close()
+            env = Ns3MultiAgentEnv(
+                targetName=env_name,
+                ns3Path=NS3_HOME,
+                ns3Settings=ns3_settings,
+                trial_name="inference",
+            )
+            obs, info = env.reset()
+            agent_id = first(obs)
+
+        while not done:
+            per_agent_obs = obs[agent_id]
+
+            if is_action_masking and isinstance(per_agent_obs, dict):
+                # Build batch with action-masking format
+                obs_tensor = {
+                    k: torch.from_numpy(v).float().unsqueeze(0)
+                    if isinstance(v, np.ndarray) else v
+                    for k, v in per_agent_obs.items()
+                }
+                batch = {"obs": obs_tensor}
+            else:
+                # Flatten dict observation
+                raw_obs_space = env.observation_spaces[agent_id]
+                flat_obs = gym.spaces.flatten(raw_obs_space, per_agent_obs)
+                batch = {"obs": torch.from_numpy(flat_obs).float().unsqueeze(0)}
+
+            with torch.no_grad():
+                out = module.forward_inference(batch)
+
+            # Extract action (squeeze time dim if action masking produced 3D logits)
+            logits = out["action_dist_inputs"]
+            if logits.dim() == 3:
+                logits = logits.squeeze(1)
+            action = torch.argmax(logits, dim=-1).squeeze(0).cpu().numpy().item()
+            if not isinstance(action, (int, np.integer)):
+                action = int(action)
+
+            obs_dict, reward_dict, terminated_dict, truncated_dict, info_dict = env.step(
+                {agent_id: action}
+            )
+            agent_id = first(obs_dict)
+            obs = obs_dict  # Keep as multi-agent dict for the next iteration.
+            reward = reward_dict[agent_id]
+            terminated = terminated_dict[agent_id]
+            truncated = truncated_dict[agent_id]
+            info = info_dict[agent_id]
+
+            episode_reward += reward
+            step_count += 1
+            done = terminated or truncated
+
     else:
-        policies = Policy.from_checkpoint(str(load_checkpoint_path))
+        # === Old Policy API stack (DQN/D3QN/SAC) ===
+        # Register env for RolloutWorker actors created by Algorithm.from_checkpoint()
+        from ray.tune import register_env
+        register_env("defiance", partial(create_env, env_name=env_name, ns3_settings=ns3_settings.copy()))
 
-    if not isinstance(policies, dict):
-        msg = "Checkpoint is not multi-agent"
-        raise TypeError(msg)
+        algo = Algorithm.from_checkpoint(str(ckpt_path))
 
-    env = Ns3MultiAgentEnv(targetName=env_name, ns3Path=NS3_HOME, ns3Settings=ns3_settings, trial_name="bootup")
-    reset = env.reset()
-    agent, observation = first(reset[0].items())
-    _, info = first(reset[1].items())
-    terminated, truncated = False, False
-    time_running = 0.0
+        # Create preprocessor from the raw observation space (12-key Dict → 117-dim Box)
+        from ray.rllib.models.preprocessors import get_preprocessor
+        raw_space = env.observation_spaces[agent_id]
+        preprocessor = get_preprocessor(raw_space)(raw_space)
+        policy = algo.get_policy(agent_id)
 
-    while True:
-        if "shared_policy" in policies:
-            action = policies["shared_policy"].compute_single_action(observation)[0]
-        else:
-            flat_obs = []
-            for key in observation:
-                val = observation[key]
-                if isinstance(val, np.ndarray):
-                    flat_obs.append(val.flatten())
-                elif isinstance(val, (int, float, np.integer, np.floating)):
-                    # RLlib FlattenObservations one-hot encodes Discrete spaces.
-                    # The agent app defines cellId as Discrete(22), rrcState as Discrete(14).
-                    # They come from the env as scalars but must be one-hot for the policy.
-                    if key == "cellId":
-                        one_hot = np.zeros(22, dtype=np.float32)
-                        one_hot[int(val)] = 1.0
-                        flat_obs.append(one_hot)
-                    elif key == "rrcState":
-                        one_hot = np.zeros(14, dtype=np.float32)
-                        one_hot[int(val)] = 1.0
-                        flat_obs.append(one_hot)
-                    else:
-                        flat_obs.append(np.array([val], dtype=np.float32))
-                else:
-                    flat_obs.append(np.atleast_1d(np.array(val, dtype=np.float32)))
-            flattened_obs = np.concatenate(flat_obs).astype(np.float32)
-            # this changes based on policy_mapping
-            action = policies[agent].compute_single_action(obs=flattened_obs)[0]
-        states = env.step({agent: action})
+        while not done:
+            flat_obs = preprocessor.transform(obs[agent_id])
+            action = policy.compute_single_action(
+                flat_obs, explore=False
+            )[0]  # (action, state_out, info)
+            obs_dict, reward_dict, terminated_dict, truncated_dict, info_dict = env.step(
+                {agent_id: action}
+            )
+            agent_id = first(obs_dict)
+            obs = obs_dict  # Keep as multi-agent dict for the next iteration.
+            reward = reward_dict[agent_id]
+            terminated = terminated_dict[agent_id]
+            truncated = truncated_dict[agent_id]
+            info = info_dict[agent_id]
 
-        terminated = terminated or states[2]["__all__"]
-        truncated = truncated or states[3]["__all__"]
+            episode_reward += reward
+            step_count += 1
+            done = terminated or truncated
 
-        if terminated or truncated:
-            break
-        agent = first(states[0])
-        observation, reward, terminated, truncated, info = (state[agent] for state in states)
-
-    # Get the termination time if terminated
-    if terminated:
-        agent = first(states[0])
-        observation, reward, terminated, truncated, info = (state[agent] for state in states)
-        time_running += float(info["terminateTime"])
-        logger.info("Average time running: %s", info["terminateTime"])
-    else:
-        # Current simulation time is 100 seconds, should be set automatically
-        time_running += float(100)
-
+    # ── Log results ───────────────────────────────────────────────────
+    logger.info(
+        "Inference complete: agent=%s, episode_reward=%.2f, steps=%d, final_info=%s",
+        agent_id, episode_reward, step_count, info,
+    )
     env.close()
 
 
@@ -123,24 +197,81 @@ def _build_ppo_config(
     env: Ns3MultiAgentEnv,
 ) -> AlgorithmConfig:
     """Apply PPO-specific training params."""
+    base_config.clip_rewards = 1.0  # Clamp rewards to [-1, 1] for stable value function
     return (
         base_config.training(
             use_critic=True,
             use_gae=True,
             lambda_=0.95,
-            use_kl_loss=False,
+            use_kl_loss=True,
             kl_coeff=0.2,
             kl_target=0.01,
-            vf_loss_coeff=0.5,
-            entropy_coeff=0.001,
+            vf_loss_coeff=1.0,
+            entropy_coeff=0.01,
             clip_param=0.2,
-            vf_clip_param=10.0,
-            grad_clip=50.0,
-            lr=0.0005,
+            vf_clip_param=200.0,
+            grad_clip=10.0,
+            lr=0.0003,
             gamma=0.99,
+            num_epochs=10,
+        )
+        .rl_module(
+            rl_module_spec=RLModuleSpec(
+                module_class=ActionMaskingTorchRLModule,
+                model_config={
+                    # "use_lstm": True,
+                    # "max_seq_len": 20,
+                    # "lstm_cell_size": 256,
+                    "head_fcnet_hiddens": [256, 256],
+                    "head_fcnet_activation": "tanh",
+                    "vf_share_layers": False,
+                },
+            ),
         )
     )
 
+def _build_sac_config(
+    base_config: AlgorithmConfig,
+    ns3_settings: dict[str, Any],
+    env: Ns3MultiAgentEnv,
+) -> AlgorithmConfig:
+    """Apply SAC-specific training params.
+
+    SAC is off-policy: uses a replay buffer and twin Q critics.
+    Key differences from PPO:
+    - No GAE, no vf_clip, no entropy_coeff (uses adaptive alpha)
+    - Uses actor_lr/critic_lr instead of lr
+    - train_batch_size controls replay buffer sampling, not on-policy batch
+    - batch_mode must stay complete_episodes for ns-3
+    """
+    base_config.clip_rewards = 1.0  # Clamp rewards to [-1, 1]
+    base_config.batch_mode = "complete_episodes"  # ns-3 requirement
+    base_config.simple_optimizer = True
+    return (
+        base_config
+        .api_stack(enable_rl_module_and_learner=False, enable_env_runner_and_connector_v2=False)
+        .resources(num_gpus=1 if HAS_GPU else 0)
+        .training(
+            twin_q=True,
+            initial_alpha=0.8,
+            alpha_lr=0.0003,
+            target_entropy="auto",
+            actor_lr=3e-5,
+            critic_lr=3e-4,
+            tau=0.005,
+            n_step=2,
+            gamma=0.99,
+            train_batch_size=1024,
+            num_steps_sampled_before_learning_starts=5000,
+            store_buffer_in_checkpoints=False,
+            replay_buffer_config={
+                "type": "MultiAgentPrioritizedReplayBuffer",
+                "capacity": 100000,
+                "prioritized_replay_alpha": 0.6,
+                "prioritized_replay_beta": 0.4,
+            },
+        )
+    )
 
 def _build_d3qn_config(
     base_config: AlgorithmConfig,
@@ -153,9 +284,9 @@ def _build_d3qn_config(
         .api_stack(enable_rl_module_and_learner=False, enable_env_runner_and_connector_v2=False)
         .resources(num_gpus=1 if HAS_GPU else 0)
         .training(
-            lr=0.0005,
+            lr=0.0003,
             gamma=0.99,
-            grad_clip=50.0,
+            grad_clip=100.0,
             train_batch_size=2048,
             target_network_update_freq=1000,
             replay_buffer_config={
@@ -168,8 +299,8 @@ def _build_d3qn_config(
             store_buffer_in_checkpoints=False,
         )
         .training(
-            # double_q=True is default in RLlib DQN
-            # dueling=True is default in RLlib DQN
+            double_q=True,
+            dueling=True,
         )
     )
 
@@ -184,9 +315,9 @@ def _build_dqn_config(
         .api_stack(enable_rl_module_and_learner=False, enable_env_runner_and_connector_v2=False)
         .resources(num_gpus=1 if HAS_GPU else 0)
         .training(
-            lr=0.0005,
+            lr=0.0003,
             gamma=0.99,
-            grad_clip=50.0,
+            grad_clip=100.0,
             train_batch_size=2048,
             target_network_update_freq=1000,
             replay_buffer_config={
@@ -207,6 +338,7 @@ def _build_dqn_config(
 
 _BUILDERS = {
     "PPO": _build_ppo_config,
+    "SAC": _build_sac_config,
     "DQN": _build_dqn_config,
     "D3QN": _build_d3qn_config,  # D3QN = DQN with double_q + dueling (RLlib default)
 }
@@ -217,6 +349,7 @@ def create_example_training_config(
     max_episode_steps: int,
     training_params: dict[str, Any],
     rollout_fragment_length: int,
+    train_batch_size_per_learner: int | None = None,
     sample_timeout_s: float | None = None,
     trainable: str = "PPO",  # PPO, DQN, or D3QN
     **ns3_settings: Any,
@@ -225,6 +358,10 @@ def create_example_training_config(
     logger.info("max_episode_steps %s not supported for multi-agent!", max_episode_steps)
 
     # Create stats directory with timestamp
+    # Determine if action masking is used (only PPO with new API stack)
+    has_action_masking = trainable in ("PPO",)
+    ns3_settings["useActionMasking"] = str(has_action_masking).lower()
+
     if ns3_settings.get("visualize"):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         stats_dir = Path(NS3_HOME) / "contrib" / "defiance" / "examples" / "uav-handover" / "stats" / f"{trainable}_{timestamp}"
@@ -258,19 +395,32 @@ def create_example_training_config(
     if trainable == "D3QN":
         rllib_trainable = "DQN"  # D3QN uses RLlib's DQN (which supports double + dueling)
 
+    # Action masking: PPO uses ActionMaskingTorchRLModule which handles dict obs.
+    # Other algorithms need FlattenObservations to convert dict -> flat vector.
+    has_action_masking = trainable in ("PPO",)
+    env_kwargs = {"action_mask_key": "action_mask"} if has_action_masking else {}
+
+    env_runner_kwargs = dict(
+        num_envs_per_env_runner=1,
+        num_env_runners=ns3_settings["parallel"],
+        create_env_on_local_worker=False,
+        rollout_fragment_length=rollout_fragment_length or "auto",
+        batch_mode="complete_episodes",
+    )
+    if sample_timeout_s is not None:
+        env_runner_kwargs["sample_timeout_s"] = sample_timeout_s
+    if not has_action_masking:
+        env_runner_kwargs["env_to_module_connector"] = _env_to_module_pipeline
+
     base_config = (
         get_trainable_cls(rllib_trainable)
         .get_default_config()
-        .environment(env="defiance", env_config={"num_agents": len(env.observation_spaces.keys())})
-        .env_runners(
-            num_envs_per_env_runner=1,
-            num_env_runners=ns3_settings["parallel"],
-            create_env_on_local_worker=False,
-            rollout_fragment_length=rollout_fragment_length or "auto",
-            batch_mode="complete_episodes",
-            env_to_module_connector=_env_to_module_pipeline,
-            **({"sample_timeout_s": sample_timeout_s} if sample_timeout_s is not None else {}),
+        .environment(
+            env="defiance",
+            env_config={"num_agents": len(env.observation_spaces.keys())},
+            **env_kwargs,
         )
+        .env_runners(**env_runner_kwargs)
         .learners(
             num_learners=1,
             num_gpus_per_learner=1 if HAS_GPU else 0,
@@ -288,6 +438,13 @@ def create_example_training_config(
 
     # Set shared params (properties, not .training() args)
     config.sgd_minibatch_size = 2048
+    if train_batch_size_per_learner is not None:
+        config.train_batch_size_per_learner = train_batch_size_per_learner
+    # Allow Ray to recreate crashed env runners as fresh actors.
+    # The RLlib restart mechanism creates a new actor process (not in-place
+    # actor revival), so the Ns3Env/Experiment singleton guards start clean.
+    config.max_num_env_runner_restarts = 1000
+    config.restart_failed_env_runners = True
     return config
 
 
@@ -322,10 +479,12 @@ def start_training(
 
         if load_checkpoint_path:
             logger.info("Restoring from checkpoint: %s", load_checkpoint_path)
+            # Don't pass param_space — the checkpoint already has its config.
+            # Passing a different config (e.g. after observation space changes)
+            # causes config conflicts during restore.
             tuner = Tuner.restore(
                 load_checkpoint_path,
                 trainable,
-                param_space=config.to_dict(),
             )
         else:
             tuner = Tuner(

@@ -24,10 +24,12 @@ class ParseKwargs(Action):
     ) -> None:
         if values is None or isinstance(values, str):
             return
-        setattr(namespace, self.dest, dict(value.split("=") for value in values))
+        setattr(namespace, self.dest, dict(value.split("=")
+                for value in values))
 
 
-arg_parser = ArgumentParser("run-agent", description="cli tool to launch ns3 coupled with python agents.")
+arg_parser = ArgumentParser(
+    "run-agent", description="cli tool to launch ns3 coupled with python agents.")
 arg_parser.add_argument(
     "type",
     choices=["debug", "train", "infer", "random"],
@@ -39,7 +41,8 @@ arg_parser.add_argument(
 arg_parser.add_argument(
     "--max-episode-steps", "-s", type=int, default=100, help="number of environment steps per iteration"
 )
-arg_parser.add_argument("--iterations", "-i", type=int, default=50, help="number of environment cycles")
+arg_parser.add_argument("--iterations", "-i", type=int,
+                        default=50, help="number of environment cycles")
 arg_parser.add_argument(
     "--single",
     "-sg",
@@ -108,6 +111,13 @@ arg_parser.add_argument(
     "keep timing out during long episodes (default 30s in RLlib).",
 )
 
+arg_parser.add_argument(
+    "--train-batch-size-per-learner",
+    "-tbs",
+    type=int,
+    default=None,
+    help="The training batch size per learner to be used for training.")
+
 ns = arg_parser.parse_args()
 
 if "seed" not in ns.ns3_settings:
@@ -124,9 +134,11 @@ match ns.type:
 
         match ns.type:
             case "debug":
-                env = make_debug_env(ns.env_name, ns.max_episode_steps, ns.ns3_settings)
+                env = make_debug_env(
+                    ns.env_name, ns.max_episode_steps, ns.ns3_settings)
             case "random":
-                env = make_env(ns.env_name, ns.max_episode_steps, ns.ns3_settings)
+                env = make_env(
+                    ns.env_name, ns.max_episode_steps, ns.ns3_settings)
             case _:
                 assert_never(ns.type)
 
@@ -142,6 +154,7 @@ match ns.type:
             ns.max_episode_steps,
             ns.training_params,
             ns.rollout_fragment_length,
+            ns.train_batch_size_per_learner,
             ns.sample_timeout,
             ns.trainable,
             **ns.ns3_settings,
@@ -151,8 +164,10 @@ match ns.type:
         if ns.enable_wandb or ns.wandb_key or ns.wandb_project:
             from ray.air.integrations.wandb import WandbLoggerCallback
 
-            wandb_logger = WandbLoggerCallback(project=ns.wandb_project, api_key=ns.wandb_key)
-        start_training(ns.iterations, config, ns.trainable, ns.checkpoint_path, wandb_logger)
+            wandb_logger = WandbLoggerCallback(
+                project=ns.wandb_project, api_key=ns.wandb_key)
+        start_training(ns.iterations, config, ns.trainable,
+                       ns.checkpoint_path, wandb_logger)
     case "infer":
         from .ray import start_inference
 

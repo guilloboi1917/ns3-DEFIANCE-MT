@@ -12,14 +12,16 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 MOBILITY_FILE = script_dir + '/output/mobility.csv'
 
 if not os.path.exists(MOBILITY_FILE):
-        print(f"MOBILITY data file not found: {MOBILITY_FILE}")
-        print("Run 'ns3 run defiance-tcp-harl' first to generate it.")
-        exit(1)
+    print(f"MOBILITY data file not found: {MOBILITY_FILE}")
+    print("Run 'ns3 run defiance-tcp-harl' first to generate it.")
+    exit(1)
 
-mobility_data = pd.read_csv(MOBILITY_FILE, header=None, names=["time", "position"])
+mobility_data = pd.read_csv(
+    MOBILITY_FILE, header=None, names=["time", "position"])
 
 # Parse: x, y, z
-xs, ys, zs = zip(*[map(float, line.split(":")) for line in mobility_data["position"]])
+xs, ys, zs = zip(*[map(float, line.split(":"))
+                 for line in mobility_data["position"]])
 
 fig = plt.figure(figsize=(14, 6))
 
@@ -27,8 +29,10 @@ fig = plt.figure(figsize=(14, 6))
 ax = fig.add_subplot(121, projection="3d")
 sc = ax.scatter(xs, ys, zs, c=zs, cmap="plasma", s=20, label="UAV path")
 ax.plot(xs, ys, zs, color="gray", alpha=0.3, linewidth=0.8)
-ax.scatter([xs[0]], [ys[0]], [zs[0]], color="green", s=80, marker="o", label="Start")
-ax.scatter([xs[-1]], [ys[-1]], [zs[-1]], color="red", s=80, marker="^", label="End")
+ax.scatter([xs[0]], [ys[0]], [zs[0]], color="green",
+           s=80, marker="o", label="Start")
+ax.scatter([xs[-1]], [ys[-1]], [zs[-1]], color="red",
+           s=80, marker="^", label="End")
 ax.set_xlabel("X (m)")
 ax.set_ylabel("Y (m)")
 ax.set_zlabel("Z (m)")
@@ -38,6 +42,11 @@ ax.set_title("3D View")
 ax.set_zlim(0, 300)
 fig.colorbar(sc, ax=ax, label="Altitude (m)")
 ax.legend(loc="upper left")
+
+for i in enumerate(zip(xs, ys, zs)):
+    height = f"z={i[1][2]:.1f}"
+    ax.text(i[1][0], i[1][1], i[1][2]-20, height,
+            fontsize=8, color="black", alpha=0.7)
 
 # ---- Top-down view ----
 ax2 = fig.add_subplot(122)
@@ -55,6 +64,6 @@ fig.colorbar(sc2, ax=ax2, label="Altitude (m)")
 ax2.legend(loc="upper left")
 
 plt.tight_layout()
-plt.savefig(script_dir+ "/output/uav_path.png", dpi=150)
+plt.savefig(script_dir + "/output/uav_path.png", dpi=150)
 print("Saved uav_path.png")
 plt.show()

@@ -14,11 +14,10 @@ uint32_t seed = 0;                // Seed for RNG
 uint32_t runId = 0;
 std::string trialName = "1";
 std::string tcpVariant = "TcpBbr";
-std::string uavMobility = "random-waypoint";
+std::string uavMobility = "ascend-random";
 std::string topology = "hexgrid";
 double startHeight = 80.0; // m
-double endHeight = 250.0;  // m
-double helixRadius = 50.0; // m
+double endHeight = 300.0;  // m (max Z for random-waypoint)
 uint32_t bbrWindowLength = 10;
 uint32_t g_addStaticUes = 0;
 bool g_fullBufferInterference = false;
@@ -26,12 +25,13 @@ double g_aerialUeRatio = 0.0;
 bool g_logging = false;
 bool rlMode = false;
 std::string handoverAlgorithm = "a3";
-uint32_t stepTime = 100; // ms
+uint32_t stepTime = 240; // ms (aligned with MS480 measurement interval)
 uint32_t delay = 0;      // ms
 double handoverPenalty = 0.01;
-double rlReferenceRate = 30000000.0; // bps
-double rlRttPenaltyWeight = 0.05;
-double rlMinRttMs = 30.0;
+double rlReferenceRate = 5000000.0; // bps (5 Mbps)
+double rlMinAcceptableGoodput = 2500000.0; // bps (2.5 Mbps)
+double rlDelayMinRttMs = 55.0;
+double rlMaxAcceptableRttMs = 100.0;
 double tcpFailurePenalty = 0.5;
 double rlfPenalty = 1.0;
 double handoverMargin = 3.0;
@@ -52,16 +52,17 @@ NetDeviceContainer g_interferingUeLteDevs;
 NodeContainer g_interferingRemoteHostContainer;
 
 uint32_t g_totalHandovers = 0;
-uint64_t g_totalRxBytes = 0;              // Total bytes received by PacketSink
-uint32_t g_totalRetransmissions = 0;      // Total TCP retransmissions
-double g_rttSumMs = 0.0;                  // Sum of RTT samples (ms) for average
-uint32_t g_rttSamples = 0;                // Number of RTT samples
+uint64_t g_totalRxBytes = 0;         // Total bytes received by PacketSink
+uint32_t g_totalRetransmissions = 0; // Total TCP retransmissions
+double g_rttSumMs = 0.0;             // Sum of RTT samples (ms) for average
+uint32_t g_rttSamples = 0;           // Number of RTT samples
 bool g_tcpConnected = false;
-bool g_handoverInProgress = false;       // True while a handover is being prepared
-bool g_tcpAlive = false;                 // True while TCP connection is alive
-bool g_rlfTriggered = false;             // True when RLF detected mid-episode
-std::vector<int32_t> g_lastRsrpValues; // per-cell RSRP (3GPP range 0-97, -1 = unknown)
-std::vector<double> g_lastSinrValues;  // per-cell UL SRS SINR (dB, -40 = unknown)
+bool g_handoverInProgress = false;    // True while a handover is being prepared
+bool g_tcpAlive = false;              // True while TCP connection is alive
+bool g_rlfTriggered = false;          // True when RLF detected mid-episode
+std::vector<double> g_lastRsrpValues; // per-cell RSRP in dBm (-200 = unknown)
+std::vector<double> g_lastSinrValues; // per-cell UL SRS SINR (dB, -40 = unknown)
+std::vector<double> g_lastRsrqValues; // per-cell RSRQ in dB  (-200 = unknown)
 
 Ptr<LteHelper> g_lteHelper;
 Ptr<PointToPointEpcHelper> g_epcHelper;
@@ -108,16 +109,14 @@ main(int argc, char* argv[])
         "TCP variant to use (TcpHarl, TcpNewReno, TcpCubic, TcpWestwoodplus, TcpVeno, TcpBbr)",
         tcpVariant);
     cmd.AddValue("uavMobility",
-                 "UAV mobility: \"constant\", \"helix\", or \"random-waypoint\"",
+                 "UAV mobility: \"constant\", \"ascend-random\", or \"random-waypoint\"",
                  uavMobility);
     cmd.AddValue(
         "topology",
         "Topology: \"simple\" (2 eNBs on a line) or \"hexgrid\" (hexagonal grid with 7 sites)",
         topology);
     cmd.AddValue("startHeight", "UAV starting altitude (m), used by all topologies", startHeight);
-    cmd.AddValue("endHeight", "UAV ending altitude (m), only used in hexgrid helix", endHeight);
-
-    cmd.AddValue("helixRadius", "Radius of the helix in the Y direction (m)", helixRadius);
+    cmd.AddValue("endHeight", "Maximum UAV altitude (m) for random-waypoint Z bounds", endHeight);
     cmd.AddValue("bbrWindowLength",
                  "TcpBbr BwWindowLength (RttWindowLength = bbrWindowLength * 1s)",
                  bbrWindowLength);
@@ -141,23 +140,24 @@ main(int argc, char* argv[])
                  stepTime);
     cmd.AddValue("delay", "Transmission delay (ms) for Simple Channel between apps", delay);
     cmd.AddValue("handoverPenalty",
-                 "Reward penalty per handover in normalized [0,1] units (default 0.1)",
+                 "Reward penalty per handover in normalized [0,1] units",
                  handoverPenalty);
     cmd.AddValue("rlReferenceRate",
-                 "Reference UL rate (bps) for throughput normalization (default 50 Mbps)",
+                 "Reference UL rate (bps) for throughput normalization",
                  rlReferenceRate);
-    cmd.AddValue("rlRttPenaltyWeight",
-                 "Weight of RTT inflation penalty term (default 0.2)",
-                 rlRttPenaltyWeight);
-    cmd.AddValue("rlMinRttMs",
-                 "Baseline RTT (ms) for inflation calc (default 30 = 10ms PGW + 20ms LTE)",
-                 rlMinRttMs);
+    cmd.AddValue("rlMinAcceptableGoodput",
+                 "Min acceptable UL goodput (bps) — below this reward is negative",
+                 rlMinAcceptableGoodput);
+    cmd.AddValue("rlDelayMinRttMs",
+                 "Lower bound RTT (ms) — no delay penalty below this",
+                 rlDelayMinRttMs);
+    cmd.AddValue("rlMaxAcceptableRttMs",
+                 "Max acceptable RTT (ms) for reward calculation",
+                 rlMaxAcceptableRttMs);
     cmd.AddValue("tcpFailurePenalty",
-                 "Reward penalty per step when TCP connection is dead (default 5.0)",
+                 "Reward penalty per step when TCP connection is dead",
                  tcpFailurePenalty);
-    cmd.AddValue("rlfPenalty",
-                 "Reward penalty when RLF is detected (default 10.0)",
-                 rlfPenalty);
+    cmd.AddValue("rlfPenalty", "Reward penalty when RLF is detected", rlfPenalty);
     cmd.AddValue("handoverMargin",
                  "RSRP margin for handover (3GPP range, ~1dB/step). "
                  "Target RSRP must > serving + margin. -999 disables.",
@@ -188,7 +188,6 @@ main(int argc, char* argv[])
                   topology,
                   startHeight,
                   endHeight,
-                  helixRadius,
                   bbrWindowLength,
                   g_addStaticUes,
                   g_fullBufferInterference,
@@ -200,8 +199,9 @@ main(int argc, char* argv[])
                   delay,
                   handoverPenalty,
                   rlReferenceRate,
-                  rlRttPenaltyWeight,
-                  rlMinRttMs,
+                  rlMinAcceptableGoodput,
+                  rlDelayMinRttMs,
+                  rlMaxAcceptableRttMs,
                   tcpFailurePenalty,
                   rlfPenalty,
                   handoverMargin);
@@ -218,10 +218,6 @@ main(int argc, char* argv[])
     std::cout << "Total retransmissions: " << g_totalRetransmissions << std::endl;
     double avgRttMs = (g_rttSamples > 0) ? (g_rttSumMs / g_rttSamples) : 0.0;
     std::cout << "Average RTT: " << avgRttMs << " ms" << std::endl;
-    if (rlMode)
-    {
-        OpenGymMultiAgentInterface::Get()->NotifySimulationEnd(0, {});
-    }
     if (g_logging)
     {
         FlowMonitorHelper flowmonHelper;
@@ -232,7 +228,10 @@ main(int argc, char* argv[])
             true,
             true);
     }
-
+    if (rlMode)
+    {
+        OpenGymMultiAgentInterface::Get()->NotifySimulationEnd(0, {});
+    }
     Simulator::Destroy();
     return 0;
 }

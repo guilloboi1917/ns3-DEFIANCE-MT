@@ -15,17 +15,21 @@ class Packet;
  * Runs on the UAV node. Measures UL throughput via the PacketSink Rx trace
  * on the remote host (the UAV is the TCP sender). The reward is:
  *
- *   reward = throughput_norm
- *          - handoverPenalty * handoverCount
- *          - rttPenaltyWeight * rttInflation
+ *   reward = normGoodput - rttPenalty - tcpPenalty - rlfTerm
  *
  * where:
- *   throughput_norm = min(sinkGoodput_bps / referenceRate_bps, 1.0)
- *   rttInflation    = max(0, currentRtt_ms - minRtt_ms) / minRtt_ms
+ *   normGoodput:
+ *      1.0                                    if goodput >= referenceRate
+ *      (goodput - minAcceptable) / (ref - min) if minAcceptable <= goodput < ref
+ *      (goodput - minAcceptable) / minAcceptable   if goodput < minAcceptable (negative)
  *
- * The RTT penalty discourages bufferbloat: when the LTE UL is congested,
- * packets queue at the RLC layer and RTT inflates even without packet loss.
- * The minRtt floor is ~10 ms (PGW-Server p2p link) + ~20 ms LTE processing.
+ *   rttPenalty:
+ *      0.0                                    if rtt <= delayMinRtt
+ *      (rtt - delayMinRtt) / (maxRtt - delayMinRtt)  if delayMinRtt < rtt < maxRtt
+ *      1.0                                    if rtt >= maxAcceptableRtt
+ *
+ * Throughput reward has a dead zone below minimumAcceptableGoodput (negative reward).
+ * RTT penalty uses a self-normalized ramp with an optional lower bound (no weight multiplier).
  */
 class HarlTcpHandoverRewardApp : public RewardApplication
 {
@@ -45,20 +49,18 @@ class HarlTcpHandoverRewardApp : public RewardApplication
     void ObserveRtt(Time oldRtt, Time newRtt);
 
   private:
-    Time m_calculationInterval{MilliSeconds(100)}; ///< Step interval for reward
-    uint32_t m_remoteHostNodeId{0};                 ///< Node ID of remote host for trace
-    double m_handoverPenalty{0.01};                 ///< Penalty per handover (norm units)
-    double m_rttPenaltyWeight{0.05};                ///< Weight of RTT inflation penalty
-    double m_minRttMs{30.0};                        ///< Baseline RTT (ms) — 10ms PGW + ~20ms LTE
-    double m_referenceRateBps{30000000.0};          ///< Reference UL rate for normalization (30 Mbps)
-    double m_tcpFailurePenalty{0.5};                ///< Penalty per step when TCP is dead
-    double m_rlfPenalty{1.0};                       ///< One-time penalty when RLF is detected
-    double m_pingPongPenalty{0.05};                 ///< Extra penalty per handover within pingPongInterval
-    Time m_pingPongInterval{Seconds(1)};            ///< Min time between handovers to avoid ping-pong penalty
-    Time m_lastHandoverTime{Seconds(0)};            ///< Sim time of last detected handover
-    uint32_t m_lastTotalHandovers{0};               ///< Handover count at last reward step
-    uint64_t m_sinkBytesReceived{0};                ///< Bytes received this step
-    int32_t m_currentRttMs{30};                     ///< Latest RTT sample (ms)
+    double m_handoverPenalty{0.01};                 ///< Penalty per handover (norm units) — currently unused
+    double m_referenceRateBps{5000000.0};           ///< Reference UL rate for throughput normalization (5 Mbps)
+    double m_minimumAcceptableGoodputBps{2500000.0}; ///< Min acceptable goodput (R_min) — below this, reward is negative
+    double m_delayMinRttMs{55.0};                    ///< Lower bound RTT (ms) — zero delay penalty below this
+    double m_maxAcceptableRttMs{100.0};              ///< Upper bound RTT (ms) — penalty clamped at 1 above this
+    double m_tcpFailurePenalty{0.5};                 ///< Penalty per step when TCP is dead
+    double m_rlfPenalty{1.0};                        ///< One-time penalty when RLF is detected
+    Time m_calculationInterval{MilliSeconds(480)};   ///< Reward step interval (aligned with MS480)
+    uint32_t m_remoteHostNodeId{0};                  ///< Node ID of remote host for trace
+    uint32_t m_lastTotalHandovers{0};                ///< Handover count at last reward step (tracking only)
+    uint64_t m_sinkBytesReceived{0};                 ///< Bytes received this step
+    int32_t m_currentRttMs{30};                      ///< Latest RTT sample (ms)
 };
 
 } // namespace ns3
