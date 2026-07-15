@@ -2,6 +2,7 @@
 
 #include "ns3/base-test.h"
 #include "ns3/lte-enb-net-device.h"
+#include <fstream>
 #include "ns3/lte-enb-rrc.h"
 #include "ns3/lte-ue-net-device.h"
 #include "ns3/lte-ue-rrc.h"
@@ -21,6 +22,8 @@ extern bool g_tcpConnected;
 extern bool g_handoverInProgress;
 extern std::vector<double> g_lastRsrpValues;
 extern std::vector<double> g_lastRsrqValues;
+extern bool g_logging;
+extern std::string g_outputDir;
 
 namespace ns3
 {
@@ -58,7 +61,7 @@ HarlTcpHandoverActionApp::GetTypeId()
                           "RSRP margin (3GPP range, ~1 dB per step). "
                           "Target must have RSRP > serving + margin. "
                           "Set to -999 to disable gating.",
-                          DoubleValue(3.0),
+                          DoubleValue(-5.0),
                           MakeDoubleAccessor(&HarlTcpHandoverActionApp::m_handoverMargin),
                           MakeDoubleChecker<double>());
     return tid;
@@ -131,6 +134,17 @@ HarlTcpHandoverActionApp::ExecuteAction(uint32_t remoteAppId, Ptr<OpenGymDictCon
         return;
     }
     uint32_t newCellId = cellIdContainer->GetValue();
+
+    // Log every action received from Python (before precondition gates)
+    if (g_logging)
+    {
+        std::ofstream actFile(g_outputDir + "rl_action.csv", std::ios_base::app);
+        actFile << Simulator::Now().GetSeconds() << ","
+                << currentCellId << ","
+                << newCellId << ","
+                << (currentCellId < g_lastRsrpValues.size() ? g_lastRsrpValues[currentCellId] : -200.0) << ","
+                << (newCellId < g_lastRsrpValues.size() ? g_lastRsrpValues[newCellId] : -200.0) << std::endl;
+    }
 
     NS_LOG_DEBUG("Handover attempt: cell " << currentCellId << " -> " << newCellId);
 
@@ -224,30 +238,9 @@ HarlTcpHandoverActionApp::ExecuteAction(uint32_t remoteAppId, Ptr<OpenGymDictCon
         return;
     }
 
-    // --- Precondition: Apply handover margin (handled by action_mask in obs app,
-    // kept here for safety when margin is disabled or mask is bypassed).
-    if (m_handoverMargin > -999.0 && newCellId < g_lastRsrpValues.size() &&
-        currentCellId < g_lastRsrpValues.size())
-    {
-        double servingRsrp = g_lastRsrpValues[currentCellId];
-        double targetRsrp = g_lastRsrpValues[newCellId];
-
-        // Block if either RSRP is unknown (-200 sentinel) — no measurement available
-        if (servingRsrp < -135.0 || targetRsrp < -135.0)
-        {
-            NS_LOG_DEBUG("Handover blocked: RSRP unknown (serving=" << servingRsrp
-                          << " target=" << targetRsrp << ")");
-            return;
-        }
-
-        if (targetRsrp < servingRsrp + m_handoverMargin)
-        {
-            NS_LOG_DEBUG("Handover blocked: target RSRP " << targetRsrp << " < serving "
-                                                          << servingRsrp << " + margin "
-                                                          << m_handoverMargin);
-            return;
-        }
-    }
+    // --- Note: RSRP margin gate removed. SAC does not use the action mask,
+    // so the agent learns from reward signal which cells are worth choosing.
+    // The action mask in the obs app only applies when trainable is PPO.
 
     NS_LOG_INFO(Simulator::Now().GetSeconds() << "s: Handover UE RNTI=" << rnti << " cell "
                                               << currentCellId << " -> " << newCellId);

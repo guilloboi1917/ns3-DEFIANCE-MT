@@ -34,22 +34,6 @@ HarlTcpHandoverAgentApp::GetTypeId()
                           "Number of base stations in the simulation.",
                           UintegerValue(2),
                           MakeUintegerAccessor(&HarlTcpHandoverAgentApp::m_numBs),
-                          MakeUintegerChecker<uint32_t>())
-            .AddAttribute("NumUes",
-                          "Number of user equipments in the simulation.",
-                          UintegerValue(1),
-                          MakeUintegerAccessor(&HarlTcpHandoverAgentApp::m_numUes),
-                          MakeUintegerChecker<uint32_t>())
-            .AddAttribute("MaxCwnd",
-                          "Maximum congestion window size (bytes) for observation scaling. "
-                          "BBR uses byte-level cwnd = pacing_rate * RTT; ~1M at 50Mbps/100ms.",
-                          UintegerValue(1000000),
-                          MakeUintegerAccessor(&HarlTcpHandoverAgentApp::m_maxCwnd),
-                          MakeUintegerChecker<uint32_t>())
-            .AddAttribute("MaxRate",
-                          "Maximum delivery rate (bps) for observation scaling.",
-                          UintegerValue(100000000),
-                          MakeUintegerAccessor(&HarlTcpHandoverAgentApp::m_maxRate),
                           MakeUintegerChecker<uint32_t>());
     return tid;
 }
@@ -69,8 +53,6 @@ HarlTcpHandoverAgentApp::OnRecvObs(uint id)
 {
     NS_LOG_FUNCTION(this << id);
     m_observation = m_obsDataStruct.GetNewestByID(id)->data;
-
-    // std::cout << "Observation: " << m_observation << std::endl;
 
     // Observations already contain all metrics (rsrp, cwnd, bbr, etc.)
     // from the observation app — no need to augment here.
@@ -120,36 +102,11 @@ HarlTcpHandoverAgentApp::GetObservationSpace()
                                                     std::vector<uint32_t>{m_numBs},
                                                     TypeNameGet<double>());
 
-    // --- Cell ID ---
-    auto cellIdSpace = CreateObject<OpenGymDiscreteSpace>(m_numBs + 1);
-
-    // --- RRC state ---
-
-    // --- TCP metrics ---
-    auto rttSpace = CreateObject<OpenGymBoxSpace>(0,
-                                                  10000, // 10s max RTT
-                                                  std::vector<uint32_t>{1},
-                                                  TypeNameGet<int32_t>());
-
-    // --- UAV position and velocity ---
-    auto posSpace = CreateObject<OpenGymBoxSpace>(-5000.0,
-                                                   5000.0,
-                                                   std::vector<uint32_t>{3},
-                                                   TypeNameGet<double>());
-    auto velSpace = CreateObject<OpenGymBoxSpace>(-200.0,
-                                                   200.0,
-                                                   std::vector<uint32_t>{3},
-                                                   TypeNameGet<double>());
-
-    // --- PHY metrics ---
-    auto mcsSpace = CreateObject<OpenGymBoxSpace>(0,
-                                                   31,
-                                                   std::vector<uint32_t>{1},
-                                                   TypeNameGet<int32_t>());
-    auto txPowerSpace = CreateObject<OpenGymBoxSpace>(-50.0,
-                                                      50.0,
-                                                      std::vector<uint32_t>{1},
-                                                      TypeNameGet<double>());
+    // // --- PHY metrics ---
+    // auto tbsSpace = CreateObject<OpenGymBoxSpace>(0,
+    //                                                100000,
+    //                                                std::vector<uint32_t>{1},
+    //                                                TypeNameGet<int32_t>());
 
     // --- Current cell UL SINR (scalar, only meaningful for serving cell) ---
     auto sinrSpace = CreateObject<OpenGymBoxSpace>(-40,
@@ -178,12 +135,7 @@ HarlTcpHandoverAgentApp::GetObservationSpace()
     dictSpace->Add("rsrpDelta", rsrpDeltaSpace);
     dictSpace->Add("rsrqDelta", rsrqDeltaSpace);
     dictSpace->Add("sinrDelta", sinrDeltaSpace);
-    dictSpace->Add("cellId", cellIdSpace);
-    dictSpace->Add("position", posSpace);
-    dictSpace->Add("velocity", velSpace);
-    dictSpace->Add("mcs", mcsSpace);
-    dictSpace->Add("txPower", txPowerSpace);
-    dictSpace->Add("rtt", rttSpace);
+    // dictSpace->Add("tbs", tbsSpace);
 
     // --- Action mask (0/1 per action: 0=no-op, 1..numBs=target cell) ---
     auto actionMaskSpace = CreateObject<OpenGymBoxSpace>(
@@ -220,21 +172,11 @@ HarlTcpHandoverAgentApp::GetResetObservation() const
     // Current cell UL SINR (scalar)
     auto sinr = MakeBoxContainer<double>(1, -40.0);
 
-    auto cellId = CreateObject<OpenGymDiscreteContainer>();
-    cellId->SetValue(0);
-
     auto rrcState = CreateObject<OpenGymDiscreteContainer>();
     rrcState->SetValue(0);
 
-    // UAV position and velocity
-    auto pos = MakeBoxContainer<double>(3, 0.0, 0.0, 0.0);
-    auto vel = MakeBoxContainer<double>(3, 0.0, 0.0, 0.0);
-
     // PHY metrics
-    auto mcs = MakeBoxContainer<int32_t>(1, 0);
-    auto txPower = MakeBoxContainer<double>(1, 0.0);
-
-    auto rtt = MakeBoxContainer<int32_t>(1, 0);
+    auto tbs = MakeBoxContainer<int32_t>(1, 0);
 
     // Deltas (zero-initialized, reset resets history)
     auto rsrpDelta = MakeBoxContainer<double>(m_numBs);
@@ -252,12 +194,7 @@ HarlTcpHandoverAgentApp::GetResetObservation() const
     obs->Add("rsrpDelta", rsrpDelta);
     obs->Add("rsrqDelta", rsrqDelta);
     obs->Add("sinrDelta", sinrDelta);
-    obs->Add("cellId", cellId);
-    obs->Add("position", pos);
-    obs->Add("velocity", vel);
-    obs->Add("mcs", mcs);
-    obs->Add("txPower", txPower);
-    obs->Add("rtt", rtt);
+    // obs->Add("tbs", tbs);
 
     return obs;
 }

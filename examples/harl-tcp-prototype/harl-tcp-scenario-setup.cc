@@ -152,9 +152,9 @@ UavRrcStateChange(std::string context,
     {
         return;
     }
-    // std::cout << "RRC state change for UE " << imsi << ", RNTI " << rnti << ": " << oldState
-    //           << " -> " << newState << " at time " << Simulator::Now().GetSeconds() << "s"
-    //           << std::endl;
+    std::cout << "RRC state change for UE " << imsi << ", RNTI " << rnti << ": " << oldState
+              << " -> " << newState << " at time " << Simulator::Now().GetSeconds() << "s"
+              << std::endl;
     g_currentRnti = rnti; // Update the global RNTI for the UAV UE
     g_currentCellId = cellId;
 
@@ -209,6 +209,21 @@ ReportUeMeasurements(uint16_t cellId,
              << rsrp << "," << sinrDb << std::endl;
 }
 
+// Log ReportUeMeasurements (200ms, averaged, dBm/dB, all cells)
+// This is the same trace source used by the obs app.
+void
+LogUeMeasReport(uint16_t rnti,
+                uint16_t cellId,
+                double rsrp,
+                double rsrq,
+                bool isServingCell,
+                uint8_t componentCarrierId)
+{
+    std::ofstream ueMeasFile(g_outputDir + "ue_meas_report.csv", std::ios_base::app);
+    ueMeasFile << Simulator::Now().GetSeconds() << "," << (int)cellId << "," << (int)rnti << ","
+               << rsrp << "," << rsrq << "," << (int)isServingCell << std::endl;
+}
+
 // UL SINR reported by the eNB (based on SRS) — logged per-RNTI
 void
 ReportUlSinr(uint16_t cellId, uint16_t rnti, double sinrLinear, uint8_t componentCarrierId)
@@ -217,6 +232,8 @@ ReportUlSinr(uint16_t cellId, uint16_t rnti, double sinrLinear, uint8_t componen
     {
         return;
     }
+    // Only the serving eNB can decode the UE's SRS (scrambling sequence is cell-specific).
+    // Non-serving eNBs do NOT fire ReportUeSinr for this UE.
     if (cellId != g_currentCellId)
     {
         return;
@@ -227,11 +244,24 @@ ReportUlSinr(uint16_t cellId, uint16_t rnti, double sinrLinear, uint8_t componen
                << std::endl;
 }
 
+// UL Interference at eNB
+void
+ReportInterference(uint16_t cellId, Ptr<SpectrumValue> spectrumValue)
+{
+    // if (cellId != g_currentCellId)
+    // {
+    //     return;
+    // }
+    std::cout << Simulator::Now().GetSeconds() << "," << cellId << "," << Sum(*spectrumValue)
+              << std::endl;
+}
+
 void
 ReportPhyTransmissionStatParameter(PhyTransmissionStatParameters param)
 {
     std::ofstream mcsFile(g_outputDir + "mcs.csv", std::ios_base::app);
-    mcsFile << Simulator::Now().GetSeconds() << "," << (int)param.m_mcs << "," << (int)param.m_size << std::endl;
+    mcsFile << Simulator::Now().GetSeconds() << "," << (int)param.m_mcs << "," << (int)param.m_size
+            << std::endl;
 }
 
 void
@@ -324,8 +354,9 @@ ComputeEnbBoundingBox(NodeContainer enbNodes, double padding)
 // ------------------------------------------------------------------------- //
 inline void
 scenarioSetup(double ueSpeed = 20.0,            // m/s
-              double simDuration = 50.0,        // seconds
+              double simDuration = 80.0,        // seconds
               double intersiteDistance = 500.0, // m
+              uint32_t numMacroCells = 7,       // number of macro sites
               double enbDowntilt = 10.0,        // degrees
               uint32_t seed = 0,                // Seed for RNG
               uint32_t runId = 0,
@@ -342,12 +373,12 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
               bool logging = true,
               bool rlMode = false,
               std::string handoverAlgorithm = "a3",
-              uint32_t stepTime = 240,
+              uint32_t stepTime = 200,
               uint32_t delay = 0,
               double handoverPenalty = 0.1,
               double referenceRateBps = 5000000.0,
               double minAcceptableGoodputBps = 2500000.0,
-              double delayMinRttMs = 55.0,
+              double delayMinRttMs = 40.0,
               double minAcceptableRttMs = 100.0,
               double tcpFailurePenalty = 5.0,
               double rlfPenalty = 10.0,
@@ -370,13 +401,17 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
                        "harl-tcp-pacing-gain.csv",
                        "harl-tcp-rtt.csv",
                        "rsrp_sinr.csv",
+                       "ue_meas_report.csv",
                        "mcs.csv",
                        "mobility.csv",
                        "sink-packets.csv",
                        "source-packets.csv",
                        "retransmissions.csv",
                        "ul_sinr.csv",
-                       "ue_tx_power.csv"})
+                       "ue_tx_power.csv",
+                       "rl_obs.csv",
+                       "rl_reward.csv",
+                       "rl_action.csv"})
         {
             std::ofstream fout(g_outputDir + f);
             // truncate on open
@@ -395,14 +430,21 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
     {
         // RL controls handover; disable automatic handover
         lteHelper->SetHandoverAlgorithmType("ns3::NoOpHandoverAlgorithm");
+        // Disable RLF detection to prevent automatic cell re-establishment
+        // from obfuscating the agent's handover decisions.
+        Config::SetDefault("ns3::LteUePhy::EnableRlfDetection", BooleanValue(false));
     }
     else if (handoverAlgorithm == "a3")
     {
         lteHelper->SetHandoverAlgorithmType("ns3::A3RsrpHandoverAlgorithm");
+        // Keep RLF detection enabled for standard A3 handover behavior
+        Config::SetDefault("ns3::LteUePhy::EnableRlfDetection", BooleanValue(true));
     }
     else if (handoverAlgorithm == "noop")
     {
         lteHelper->SetHandoverAlgorithmType("ns3::NoOpHandoverAlgorithm");
+        // RLF detection disabled: no handover algorithm to recover
+        Config::SetDefault("ns3::LteUePhy::EnableRlfDetection", BooleanValue(false));
     }
     else
     {
@@ -435,30 +477,40 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
     // Aerial UEs (high RSRP, moderate RSRQ due to LOS interference) fall into the
     // medium zone, which uses a subset of RBs and lower UL power. This reduces
     // their interference to adjacent cells by 4-5 dB.
-    // lteHelper->SetFfrAlgorithmType("ns3::LteFfrSoftAlgorithm");
-    lteHelper->SetFfrAlgorithmType("ns3::LteFrNoOpAlgorithm");
-//     lteHelper->SetFfrAlgorithmAttribute("CenterRsrqThreshold", UintegerValue(15)); // Default
-//     lteHelper->SetFfrAlgorithmAttribute("EdgeRsrqThreshold", UintegerValue(8)); // Default
-//     lteHelper->SetFfrAlgorithmAttribute("UlCommonSubBandwidth", UintegerValue(100));
-//    lteHelper->SetFfrAlgorithmAttribute("UlEdgeSubBandwidth", UintegerValue(0));
-//     lteHelper->SetFfrAlgorithmAttribute("CenterAreaPowerOffset",
-//                                         UintegerValue(LteRrcSap::PdschConfigDedicated::dB_6));
-//     lteHelper->SetFfrAlgorithmAttribute("MediumAreaPowerOffset",
-//                                         UintegerValue(LteRrcSap::PdschConfigDedicated::dB_1dot77));
-//     lteHelper->SetFfrAlgorithmAttribute("EdgeAreaPowerOffset",
-//                                         UintegerValue(LteRrcSap::PdschConfigDedicated::dB3));
-//     lteHelper->SetFfrAlgorithmAttribute("CenterAreaTpc", UintegerValue(1));
-//     lteHelper->SetFfrAlgorithmAttribute("MediumAreaTpc", UintegerValue(2));
-//     lteHelper->SetFfrAlgorithmAttribute("EdgeAreaTpc", UintegerValue(3));
+    //
+    // NOTE: The attributes below (UlCommonSubBandwidth, UlEdgeSubBandOffset,
+    // UlEdgeSubBandwidth) are OVERRIDDEN by the default config table in
+    // SetUplinkConfiguration() during DoInitialize(). The effective values for
+    // 100 RB bandwidth at FrCellTypeId 1/2/3 are:
+    //   Type 1: common=28, edgeOffset=0,  edge=24  → Center: RBs 52..99 (48 RB)
+    //   Type 2: common=28, edgeOffset=24, edge=24  → Center: RBs 28..51, 76..99
+    //   Type 3: common=28, edgeOffset=48, edge=24  → Center: RBs 28..75  (48 RB)
+    // Edge band is reuse-3, Center band is reuse-1, Medium band is reuse-1 (28 RB).
+    lteHelper->SetFfrAlgorithmType("ns3::LteFfrSoftAlgorithm");
+    // lteHelper->SetFfrAlgorithmType("ns3::LteFrNoOpAlgorithm");
+    // (Attributes CenterRsrqThreshold=15, EdgeRsrqThreshold=8, and the power
+    //  offset/TPC settings below DO take effect, as they have no default table.)
+    lteHelper->SetFfrAlgorithmAttribute("CenterRsrqThreshold", UintegerValue(15));
+    lteHelper->SetFfrAlgorithmAttribute("EdgeRsrqThreshold", UintegerValue(8));
+    lteHelper->SetFfrAlgorithmAttribute("CenterAreaPowerOffset",
+                                        UintegerValue(LteRrcSap::PdschConfigDedicated::dB_6));
+    lteHelper->SetFfrAlgorithmAttribute("MediumAreaPowerOffset",
+                                        UintegerValue(LteRrcSap::PdschConfigDedicated::dB_1dot77));
+    lteHelper->SetFfrAlgorithmAttribute("EdgeAreaPowerOffset",
+                                        UintegerValue(LteRrcSap::PdschConfigDedicated::dB3));
+    lteHelper->SetFfrAlgorithmAttribute("CenterAreaTpc", UintegerValue(1));
+    lteHelper->SetFfrAlgorithmAttribute("MediumAreaTpc", UintegerValue(2));
+    lteHelper->SetFfrAlgorithmAttribute("EdgeAreaTpc", UintegerValue(3));
+    // (UlCommonSubBandwidth, UlEdgeSubBandOffset, UlEdgeSubBandwidth are
+    //  set here but silently overridden by default table — kept for clarity)
 
     // ---- LTE device configuration -------------------------------------- //
     double enbTxPowerDbm = 49.0; // dBm, corresponds to 10W, typical for macro eNodeBs
     Config::SetDefault("ns3::LteEnbPhy::TxPower", DoubleValue(enbTxPowerDbm));
     double ueTxPowerDbm = 23.0; // dBm, corresponds to 200mW, typical UE transmit power
     Config::SetDefault("ns3::LteUePhy::TxPower", DoubleValue(ueTxPowerDbm));
-    Config::SetDefault(
-        "ns3::LteUePhy::NoiseFigure",
-        DoubleValue(11.0)); // Noise figure in dB, increased to simulate external interference
+    Config::SetDefault("ns3::LteUePhy::NoiseFigure",
+                       DoubleValue(9.0)); // Noise figure in dB
     Config::SetDefault("ns3::LteEnbRrc::SrsPeriodicity", UintegerValue(80));
     Config::SetDefault("ns3::LteHelper::UsePdschForCqiGeneration", BooleanValue(false));
 
@@ -551,8 +603,8 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
     // ---- eNB setup: simple vs hexgrid ---------------------------------- //
     if (topology == "hexgrid")
     {
-        uint32_t numMacroCells = 7;
-        uint32_t nMacroEnbSitesX = 2;
+        uint32_t nMacroEnbSitesX =
+            numMacroCells == 7 ? 2 : 1; // Not checking for other numbers of macro cells
         g_enbContainer.Create(3 * numMacroCells);
 
         MobilityHelper mobility;
@@ -564,9 +616,16 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
         hexHelper->SetAttribute("InterSiteDistance", DoubleValue(intersiteDistance));
         hexHelper->SetAttribute("SiteHeight", DoubleValue(25.0));
         hexHelper->SetAttribute("GridWidth", UintegerValue(nMacroEnbSitesX));
-        hexHelper->SetAttribute("EnableWraparound", BooleanValue(true));
+        hexHelper->SetAttribute("EnableWraparound", BooleanValue(false));
 
         g_enbLteDevs = hexHelper->SetPositionAndInstallEnbDevice(g_enbContainer);
+
+        // std::cout << "ENB Positions:" << std::endl;
+        // for (int32_t i = 0; i < g_enbContainer.GetN(); ++i)
+        // {
+        //     Vector position = g_enbContainer.Get(i)->GetObject<MobilityModel>()->GetPosition();
+        //     std::cout << position << std::endl;
+        // }
 
         lteHelper->AddX2Interface(g_enbContainer);
 
@@ -613,7 +672,7 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
                 {
                     nextPos = Vector(rbx->GetValue(), rby->GetValue(), rbz->GetValue());
                     dist = CalculateDistance(currentPos, nextPos);
-                } while (dist < 20.0 || dist > 100.0);
+                } while (dist < 50.0 || dist > 120.0);
                 double travelTime = dist / ueSpeed;
                 currentTime += travelTime;
                 wpMob->AddWaypoint(Waypoint(Seconds(currentTime), nextPos));
@@ -649,7 +708,7 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
                 {
                     nextPos = Vector(rbx->GetValue(), rby->GetValue(), rbz->GetValue());
                     dist = CalculateDistance(currentPos, nextPos);
-                } while (dist < 20.0 || dist > 100.0); // waypoints 20-100m apart
+                } while (dist < 50.0 || dist > 120.0); // waypoints 50-120m apart
 
                 double travelTime = dist / ueSpeed;
                 currentTime += travelTime;
@@ -999,7 +1058,8 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
     // Add measurement configuration
     LteRrcSap::ReportConfigEutra reportConfig;
     reportConfig.reportInterval =
-        LteRrcSap::ReportConfigEutra::MS240; // Aligned with step, reward, and observation cadence
+        LteRrcSap::ReportConfigEutra::MS240; // A3 handover measurement period (independent of obs
+                                             // cadence)
     for (auto it = g_enbLteDevs.Begin(); it != g_enbLteDevs.End(); ++it)
     {
         Ptr<NetDevice> netDevice = *it;
@@ -1041,6 +1101,10 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
     Config::ConnectWithoutContext("/NodeList/" + std::to_string(uavNodeId) +
                                       "/DeviceList/*/LteUeRrc/HandoverEndError",
                                   MakeCallback(&HandoverError));
+    // Interference
+    // Config::ConnectWithoutContext("/NodeList/*/DeviceList/*/$ns3::LteEnbNetDevice/"
+    //                               "ComponentCarrierMap/*/LteEnbPhy/ReportInterference",
+    //                               MakeCallback(&ReportInterference));
 
     Simulator::Schedule(Seconds(1.1), []() {
         Ptr<Node> uav = g_uavContainer.Get(0);
@@ -1112,6 +1176,12 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
 
         Config::ConnectWithoutContext("/NodeList/" + std::to_string(uavNodeId) +
                                           "/DeviceList/*/$ns3::LteUeNetDevice/"
+                                          "ComponentCarrierMapUe/*/LteUePhy/"
+                                          "ReportUeMeasurements",
+                                      MakeCallback(&LogUeMeasReport));
+
+        Config::ConnectWithoutContext("/NodeList/" + std::to_string(uavNodeId) +
+                                          "/DeviceList/*/$ns3::LteUeNetDevice/"
                                           "ComponentCarrierMapUe/*/LteUePhy/UlPhyTransmission",
                                       MakeCallback(&ReportPhyTransmissionStatParameter));
 
@@ -1149,7 +1219,7 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
         uint32_t uavNodeId = g_uavContainer.Get(0)->GetId();
         g_lastRsrpValues.resize(numBs + 1, -140.0); // index by cellId (1-based), dBm
         g_lastSinrValues.resize(numBs + 1, -40.0);  // index by cellId (1-based), -40dB = unknown
-        g_lastRsrqValues.resize(numBs + 1, -20.0); // index by cellId (1-based), dB
+        g_lastRsrqValues.resize(numBs + 1, -20.0);  // index by cellId (1-based), dB
 
         // std::cout << "Installing RL handover apps (NumBs=" << numBs << ", StepTime=" << stepTime
         //           << "ms"
@@ -1161,7 +1231,7 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
         uint32_t remoteHostNodeId = g_remoteHostContainer.Get(0)->GetId();
 
         RlApplicationHelper rlAppHelper(HarlTcpHandoverRewardApp::GetTypeId());
-        rlAppHelper.SetAttribute("StartTime", TimeValue(Seconds(0.5)));
+        rlAppHelper.SetAttribute("StartTime", TimeValue(Seconds(2.0)));
         rlAppHelper.SetAttribute("StopTime", TimeValue(Seconds(simDuration)));
         rlAppHelper.SetAttribute("RemoteHostNodeId", UintegerValue(remoteHostNodeId));
         rlAppHelper.SetAttribute("HandoverPenalty", DoubleValue(handoverPenalty));
@@ -1171,18 +1241,18 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
         rlAppHelper.SetAttribute("MaxAcceptableRttMs", DoubleValue(minAcceptableRttMs));
         rlAppHelper.SetAttribute("TcpFailurePenalty", DoubleValue(tcpFailurePenalty));
         rlAppHelper.SetAttribute("RlfPenalty", DoubleValue(rlfPenalty));
-        rlAppHelper.SetAttribute("CalculationInterval",
-                                 TimeValue(MilliSeconds(stepTime))); // Match UE PHY measurement period
+        rlAppHelper.SetAttribute(
+            "CalculationInterval",
+            TimeValue(MilliSeconds(stepTime))); // Match UE PHY measurement period
         auto rewardApps = rlAppHelper.Install(g_uavContainer.Get(0));
 
         rlAppHelper.SetTypeId(HarlTcpHandoverAgentApp::GetTypeId());
-        rlAppHelper.SetAttribute("StartTime", TimeValue(Seconds(0.5)));
+        rlAppHelper.SetAttribute("StartTime", TimeValue(Seconds(2.0)));
         rlAppHelper.SetAttribute("NumBs", UintegerValue(numBs));
-        rlAppHelper.SetAttribute("NumUes", UintegerValue(1));
         auto agentApps = rlAppHelper.Install(g_uavContainer.Get(0));
 
         rlAppHelper.SetTypeId(HarlTcpHandoverObservationApp::GetTypeId());
-        rlAppHelper.SetAttribute("StartTime", TimeValue(Seconds(0.5)));
+        rlAppHelper.SetAttribute("StartTime", TimeValue(Seconds(2.0)));
         rlAppHelper.SetAttribute("NumBs", UintegerValue(numBs));
         rlAppHelper.SetAttribute("UavNodeId", UintegerValue(uavNodeId));
         rlAppHelper.SetAttribute("StepTimeMs", UintegerValue(stepTime));
@@ -1190,7 +1260,7 @@ scenarioSetup(double ueSpeed = 20.0,            // m/s
         auto obsApps = rlAppHelper.Install(g_uavContainer.Get(0));
 
         rlAppHelper.SetTypeId(HarlTcpHandoverActionApp::GetTypeId());
-        rlAppHelper.SetAttribute("StartTime", TimeValue(Seconds(0.5)));
+        rlAppHelper.SetAttribute("StartTime", TimeValue(Seconds(2.0)));
         rlAppHelper.SetAttribute("NumBs", UintegerValue(numBs));
         rlAppHelper.SetAttribute("HandoverAlgorithm", StringValue("agent"));
         rlAppHelper.SetAttribute("HandoverMargin", DoubleValue(handoverMargin));

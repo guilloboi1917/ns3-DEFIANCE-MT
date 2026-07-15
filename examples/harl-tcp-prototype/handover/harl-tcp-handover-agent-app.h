@@ -14,13 +14,14 @@ namespace ns3
  * computes handover actions, and dispatches them via HarlTcpHandoverActionApp.
  *
  * Observation space (dict):
- *   - rsrps: Box(int32, shape=(numBs,), range [-1, 97])
- *   - sinrs: Box(double, shape=(numBs,), range [-40, 50])
- *   - cellId: Discrete(numBs+1)
- *   - rrcState: Discrete(14)
- *   - cwnd: Box(int32, shape=(1,), range [0, 65535])
- *   - rtt: Box(int32, shape=(1,), range [0, 10000])
- *   - deliveryRate: Box(int32, shape=(1,), range [0, 100000000])
+ *   - rsrps: Box(double, shape=(numBs,), range [-160, -40])
+ *   - rsrqs: Box(double, shape=(numBs,), range [-100, -3])
+ *   - sinr: Box(double, shape=(1,), range [-40, 50])
+ *   - rsrpDelta: Box(double, shape=(numBs,), range [-60, 60])
+ *   - rsrqDelta: Box(double, shape=(numBs,), range [-60, 60])
+ *   - sinrDelta: Box(double, shape=(1,), range [-20, 20])
+ *   - tbs: Box(int32, shape=(1,), range [0, 100000])
+ *   - action_mask: Box(double, shape=(numBs+1,), range [0, 1])
  *
  * Action space: Discrete(numBs + 1)
  *   - 0 = No-op
@@ -49,10 +50,6 @@ class HarlTcpHandoverAgentApp : public AgentApplication
 
   private:
     uint32_t m_numBs;            ///< Number of base stations
-    uint32_t m_numUes;           ///< Number of UEs
-    uint32_t m_stepTime;         ///< Step interval in ms
-    uint32_t m_maxCwnd;          ///< Max cwnd for observation scaling (default 65535)
-    uint32_t m_maxRate;          ///< Max delivery rate for obs scaling (default 100 Mbps)
     Time m_lastInferredActionTime{Seconds(0)}; ///< Last time an action was inferred
 };
 

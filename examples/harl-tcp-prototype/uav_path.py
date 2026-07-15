@@ -27,7 +27,7 @@ fig = plt.figure(figsize=(14, 6))
 
 # ---- 3D view ----
 ax = fig.add_subplot(121, projection="3d")
-sc = ax.scatter(xs, ys, zs, c=zs, cmap="plasma", s=20, label="UAV path")
+sc = ax.scatter(xs, ys, zs, color="black", s=20, label="UAV path")
 ax.plot(xs, ys, zs, color="gray", alpha=0.3, linewidth=0.8)
 ax.scatter([xs[0]], [ys[0]], [zs[0]], color="green",
            s=80, marker="o", label="Start")
@@ -40,7 +40,7 @@ ax.set_title("3D View")
 # ax.set_xlim(-500, 500)
 # ax.set_ylim(-500, 500)
 ax.set_zlim(0, 300)
-fig.colorbar(sc, ax=ax, label="Altitude (m)")
+# fig.colorbar(sc, ax=ax, label="Altitude (m)")
 ax.legend(loc="upper left")
 
 for i in enumerate(zip(xs, ys, zs)):

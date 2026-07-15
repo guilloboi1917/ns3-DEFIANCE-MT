@@ -5,12 +5,17 @@
  * @brief Reward application for the HARL TCP handover RL agent.
  *
  * Reward design:
- *   reward = normGoodput - rttPenalty - tcpPenalty - rlfTerm
+ *   reward = normGoodput - rttPenalty - tcpPenalty - rlfTerm + tbsBonus
  *
- *   normGoodput:
- *      1.0                                    if goodput >= referenceRate
- *      (goodput - minAcceptable) / (ref - min) if minAcceptable <= goodput < ref
- *      (goodput - minAcceptable) / minAcceptable   if goodput < minAcceptable (negative)
+ *   normGoodput (EWMA-based adaptive reference):
+ *      1.0                                    if goodput >= dynamicRef
+ *      (goodput - dynamicMin) / (ref - min)   if dynamicMin <= goodput < dynamicRef
+ *      (goodput - dynamicMin) / dynamicMin    if goodput < dynamicMin (negative)
+ *
+ *   dynamicRef = m_ewmaGoodput x 1.1   (lagging EWMA of actual goodput)
+ *   dynamicMin = m_ewmaGoodput x 0.3
+ *
+ *   tbsBonus = small TBS-based bonus for cell quality (0 to 0.3)
  *
  *   rttPenalty:
  *      0.0                                    if rtt <= delayMinRtt
@@ -19,19 +24,22 @@
  *
  * - Goodput is measured from the PacketSink Rx trace on the remote host
  *   (UAV is the TCP sender, UL application-layer goodput).
- * - All penalties are scaled to be comparable to normGoodput [0,1].
+ * - The EWMA-based reference replaces the old TBS-based one to avoid the
+ *   inverted incentive where bad cells (low TBS) had easier targets.
  */
 
 #include "harl-tcp-handover-rwd-app.h"
 
 #include "ns3/base-test.h"
 #include "ns3/lte-ue-net-device.h"
+#include "ns3/lte-ue-rrc.h"
 #include "ns3/network-module.h"
 #include "ns3/node-list.h"
 #include "ns3/packet.h"
 
 #include <algorithm>
 #include <cstdint>
+#include <fstream>
 
 using namespace ns3;
 
@@ -42,7 +50,10 @@ extern NodeContainer g_uavContainer;
 extern NodeContainer g_remoteHostContainer;
 extern uint32_t g_totalHandovers;
 extern bool g_tcpAlive;
+extern std::vector<double> g_lastRsrpValues;
 extern bool g_rlfTriggered;
+extern bool g_logging;
+extern std::string g_outputDir;
 
 namespace ns3
 {
@@ -117,11 +128,23 @@ HarlTcpHandoverRewardApp::GetTypeId()
                           MakeDoubleAccessor(&HarlTcpHandoverRewardApp::m_rlfPenalty),
                           MakeDoubleChecker<double>())
             .AddAttribute("CalculationInterval",
-                          "Interval (s) between reward calculations. Aligned with MS480 "
-                          "measurement report interval (480ms).",
-                          TimeValue(MilliSeconds(480)),
+                          "Interval (s) between reward calculations. Aligned with "
+                          "ReportUeMeasurements cadence (200ms).",
+                          TimeValue(MilliSeconds(200)),
                           MakeTimeAccessor(&HarlTcpHandoverRewardApp::m_calculationInterval),
-                          MakeTimeChecker());
+                          MakeTimeChecker())
+            .AddAttribute("EwmaAlpha",
+                          "EWMA smoothing factor for goodput-based adaptive reference. "
+                          "0.2 = 5-step (~1s) window for faster reaction to throughput changes.",
+                          DoubleValue(0.2),
+                          MakeDoubleAccessor(&HarlTcpHandoverRewardApp::m_ewmaAlpha),
+                          MakeDoubleChecker<double>(0.0, 1.0))
+            .AddAttribute("TbsBonusWeight",
+                          "TBS throughput bonus weight per Mbps (capped at 0.3). "
+                          "Rewards being on a physically capable cell.",
+                          DoubleValue(0.003),
+                          MakeDoubleAccessor(&HarlTcpHandoverRewardApp::m_tbsBonusWeight),
+                          MakeDoubleChecker<double>(0.0));
     return tid;
 }
 
@@ -132,6 +155,24 @@ HarlTcpHandoverRewardApp::RegisterCallbacks()
     if (m_remoteHostNodeId == 0 && g_remoteHostContainer.GetN() > 0)
     {
         m_remoteHostNodeId = g_remoteHostContainer.Get(0)->GetId();
+    }
+
+    // Cache UAV node ID and reserve TBS buffer
+    if (g_uavContainer.GetN() > 0)
+    {
+        m_uavNodeId = g_uavContainer.Get(0)->GetId();
+        m_tbsHistory.reserve(512); // enough for ~500ms at 1ms TTI
+    }
+
+    // Connect to UL PHY transmission trace for TBS values
+    if (m_uavNodeId > 0)
+    {
+        Config::ConnectWithoutContext(
+            "/NodeList/" + std::to_string(m_uavNodeId) +
+                "/DeviceList/*/$ns3::LteUeNetDevice/"
+                "ComponentCarrierMapUe/*/LteUePhy/"
+                "UlPhyTransmission",
+            MakeCallback(&HarlTcpHandoverRewardApp::ObserveUlPhyTransmission, this));
     }
 
     NS_LOG_INFO("Connecting to PacketSink Rx on remoteHost node " << m_remoteHostNodeId);
@@ -158,12 +199,14 @@ HarlTcpHandoverRewardApp::RegisterCallbacks()
         });
     }
 
-    // Initialize handover tracking and RTT baseline
+    // Initialize handover tracking, RTT baseline, and one-shot penalty flags
     m_lastTotalHandovers = g_totalHandovers;
     m_currentRttMs = static_cast<int32_t>(m_delayMinRttMs);
+    m_tcpPenaltyApplied = false;
 
-    // Schedule first reward computation after apps start (~1.0s + margin)
-    Simulator::Schedule(Seconds(1.5) + m_calculationInterval,
+    // Schedule first reward computation shortly after app start (aligns with first observation)
+    // TCP is already running at this point (started at 1.5s), so goodput data is available.
+    Simulator::Schedule(m_calculationInterval,
                         &HarlTcpHandoverRewardApp::SendReward,
                         this);
 
@@ -189,6 +232,13 @@ HarlTcpHandoverRewardApp::ObserveRtt(Time oldRtt, Time newRtt)
 }
 
 void
+HarlTcpHandoverRewardApp::ObserveUlPhyTransmission(PhyTransmissionStatParameters param)
+{
+    int32_t tbs = static_cast<int32_t>(param.m_size);
+    m_tbsHistory.push_back(tbs);
+}
+
+void
 HarlTcpHandoverRewardApp::SendReward()
 {
     // --- 1. Compute UL goodput (bps) from sink bytes this step ---
@@ -199,85 +249,201 @@ HarlTcpHandoverRewardApp::SendReward()
         goodputBps = static_cast<double>(m_sinkBytesReceived) * 8.0 / intervalSec;
     }
 
-    // --- 2. Normalize throughput ---
-    //     goodput >= referenceRate             → 1.0
-    //     minAcceptable <= goodput < refRate    → 0..1 linearly
-    //     goodput < minAcceptable               → negative (0 at minAcceptable, -1 at 0 bps)
-    double normGoodput = 0.0;
-    if (m_referenceRateBps > 0.0 && m_minimumAcceptableGoodputBps > 0.0)
+    // --- 2. Compute adaptive reference rate from EWMA of actual goodput ---
+    //     dynamicRef = m_ewmaGoodput × 1.1    (10% above recent throughput)
+    //     dynamicMin = m_ewmaGoodput × 0.3    (30% of recent throughput)
+    //
+    //     The EWMA lags behind real goodput. After a good handover, goodput
+    //     rises above the EWMA, pushing normGoodput above 1.0 for several
+    //     steps until the EWMA catches up. This transient overshoot is the
+    //     improvement signal that drives exploration toward better cells.
+    //
+    //     Compute TBS throughput for the bonus first (before clearing history)
+    double tbsThroughputBps = 0.0;
+    if (!m_tbsHistory.empty())
     {
-        if (goodputBps >= m_referenceRateBps)
+        int64_t tbsSum = 0;
+        for (auto tbs : m_tbsHistory)
+        {
+            tbsSum += tbs;
+        }
+        tbsThroughputBps = (static_cast<double>(tbsSum) / m_tbsHistory.size()) * 8000.0;
+        m_tbsHistory.clear();
+    }
+
+    double dynamicRefBps = m_referenceRateBps;
+    double dynamicMinBps = m_minimumAcceptableGoodputBps;
+    if (m_ewmaGoodput > 0.0)
+    {
+        dynamicRefBps = m_ewmaGoodput * 1.1;
+        dynamicMinBps = m_ewmaGoodput * 0.3;
+    }
+
+    // Update EWMA with current goodput (after computing ref, so ref uses last step's EWMA)
+    if (m_ewmaGoodput <= 0.0)
+    {
+        m_ewmaGoodput = goodputBps;
+    }
+    else
+    {
+        m_ewmaGoodput = m_ewmaAlpha * goodputBps + (1.0 - m_ewmaAlpha) * m_ewmaGoodput;
+    }
+
+    // --- 3. Normalize throughput ---
+    //     goodput >= dynamicRef                → 1.0
+    //     dynamicMin <= goodput < dynamicRef    → 0..1 linearly
+    //     goodput < dynamicMin                  → negative
+    //
+    //     When TCP is not alive, cap negative normGoodput at -0.2 so the
+    //     agent isn't flooded with -1 per step while waiting for TCP retransmission.
+    double normGoodput = 0.0;
+    if (dynamicRefBps > 0.0 && dynamicMinBps > 0.0)
+    {
+        if (goodputBps >= dynamicRefBps)
         {
             normGoodput = 1.0;
         }
-        else if (goodputBps >= m_minimumAcceptableGoodputBps)
+        else if (goodputBps >= dynamicMinBps)
         {
-            normGoodput = (goodputBps - m_minimumAcceptableGoodputBps) /
-                          (m_referenceRateBps - m_minimumAcceptableGoodputBps);
+            normGoodput = (goodputBps - dynamicMinBps) / (dynamicRefBps - dynamicMinBps);
         }
         else
         {
-            normGoodput =
-                (goodputBps - m_minimumAcceptableGoodputBps) / m_minimumAcceptableGoodputBps;
+            normGoodput = (goodputBps - dynamicMinBps) / dynamicMinBps;
         }
+    }
+
+    // When TCP is dead, set normGoodput to 0 (neutral) instead of negative.
+    // The one-shot tcpPenalty (-0.5) already fires once. Additional negative
+    // normGoodput would drown out the reward signal for 10-40 SYN retransmission steps.
+    if (!g_tcpAlive)
+    {
+        normGoodput = 0.0;
     }
 
     // --- 3. Compute delay penalty (self-normalized ramp, no weight multiplier) ---
     //     rtt <= delayMinRtt    → 0.0
     //     rtt >= maxAcceptableRtt → 1.0
     //     delayMinRtt < rtt < maxRtt → linear 0..1
+    //     If TCP is dead, RTT is stale — set penalty to 0.
     double rttPenalty = 0.0;
-    double rangeMs = m_maxAcceptableRttMs - m_delayMinRttMs;
-    if (rangeMs > 0.0)
+    if (g_tcpAlive)
     {
-        if (m_currentRttMs >= m_maxAcceptableRttMs)
+        double rangeMs = m_maxAcceptableRttMs - m_delayMinRttMs;
+        if (rangeMs > 0.0)
         {
-            rttPenalty = 1.0;
-        }
-        else if (m_currentRttMs > m_delayMinRttMs)
-        {
-            rttPenalty = (m_currentRttMs - m_delayMinRttMs) / rangeMs;
+            if (m_currentRttMs >= m_maxAcceptableRttMs)
+            {
+                rttPenalty = 1.0;
+            }
+            else if (m_currentRttMs > m_delayMinRttMs)
+            {
+                rttPenalty = (m_currentRttMs - m_delayMinRttMs) / rangeMs;
+            }
         }
     }
 
-    // Keep track of handovers for logging only (no penalty)
-    m_lastTotalHandovers = g_totalHandovers;
-
-    // --- 4. Apply TCP failure penalty ---
+    // --- 4. Apply TCP failure penalty (one-shot) ---
     double tcpPenalty = 0.0;
-    if (!g_tcpAlive)
+    if (!g_tcpAlive && !m_tcpPenaltyApplied)
     {
         tcpPenalty = m_tcpFailurePenalty;
-        NS_LOG_DEBUG("TCP not alive, applying penalty: " << m_tcpFailurePenalty);
+        m_tcpPenaltyApplied = true;
+        NS_LOG_DEBUG("TCP not alive, applying one-shot penalty: " << m_tcpFailurePenalty);
     }
 
-    // --- 6. Apply RLF penalty (one-time) ---
+    // --- 5. Apply RLF penalty (one-time) ---
     double rlfTerm = 0.0;
     if (g_rlfTriggered)
     {
         rlfTerm = m_rlfPenalty;
-        g_rlfTriggered = false; // one-shot: only penalise the step RLF occurs
+        g_rlfTriggered = false;
         NS_LOG_DEBUG("RLF detected, applying penalty: " << m_rlfPenalty);
     }
 
-    // --- 5. Compute reward ---
-    double reward = normGoodput - rttPenalty; // removing tcp penalty and rlf term for now should be captured by throughput/rtt
+    // Query current serving cell ID and RSRP
+    uint32_t servingCellId = 0;
+    double currentRsrp = -140.0;
+    if (g_uavLteDevs.GetN() > 0)
+    {
+        auto ueNetDev = g_uavLteDevs.Get(0)->GetObject<LteUeNetDevice>();
+        if (ueNetDev && ueNetDev->GetRrc())
+        {
+            servingCellId = ueNetDev->GetRrc()->GetCellId();
+            if (servingCellId > 0 && servingCellId < g_lastRsrpValues.size())
+            {
+                currentRsrp = g_lastRsrpValues[servingCellId];
+            }
+        }
+    }
 
-    // Wide clamp as safety net only (should not trigger after scaling)
+    // --- 6. Handover penalty + RSRP delta bonus (triggered on handover) ---
+    double handoverPenalty = 0.0;
+    double rsrpDeltaBonus = 0.0;
+    if (g_totalHandovers > m_lastTotalHandovers)
+    {
+        handoverPenalty = m_handoverPenalty;
+
+        // RSRP delta: compare new serving cell to previous serving cell
+        double deltaRsrp = currentRsrp - m_previousServingRsrp;
+        // Map [-10, +10] dB → [-3.0, +2.0] reward, clamped.
+        rsrpDeltaBonus = std::max(-3.0, std::min(2.0, deltaRsrp / 5.0));
+
+        m_lastTotalHandovers = g_totalHandovers;
+        NS_LOG_DEBUG("Handover detected: penalty=" << m_handoverPenalty
+                      << " deltaRsrp=" << deltaRsrp << "dB rsrpDeltaBonus=" << rsrpDeltaBonus);
+    }
+
+    // Save current RSRP for next step's delta computation
+    m_previousServingRsrp = currentRsrp;
+
+    // --- 7. Compute TBS bonus (cell radio quality) ---
+    double tbsBonus = 0.0;
+    if (tbsThroughputBps > 0.0)
+    {
+        tbsBonus = std::min(0.3, m_tbsBonusWeight * tbsThroughputBps / 1e6);
+    }
+
+    // --- 8. Compute reward ---
+    // double reward =
+    //     normGoodput - rttPenalty -
+    //     tcpPenalty - handoverPenalty + tbsBonus + rsrpDeltaBonus;
+    double rsrpPerStepBonus = (currentRsrp + 110) / 60 * 0.5;
+    double reward = normGoodput + rsrpPerStepBonus - handoverPenalty;
+
+    // Wide clamp as safety net only
     reward = std::max(reward, -100.0);
 
+    // Log reward components to CSV if logging is enabled
+    if (g_logging)
+    {
+        std::ofstream rwdFile(g_outputDir + "rl_reward.csv", std::ios_base::app);
+        rwdFile << Simulator::Now().GetSeconds() << ","
+                << (goodputBps / 1e6) << ","
+                << (dynamicRefBps / 1e6) << ","
+                << (dynamicMinBps / 1e6) << ","
+                << normGoodput << ","
+                // << m_currentRttMs << ","
+                // << rttPenalty << ","
+                // << tcpPenalty << ","
+                // << tbsBonus << ","
+                << handoverPenalty << ","
+                << rsrpDeltaBonus << ","
+                << reward << std::endl;
+    }
+
     NS_LOG_INFO("Reward: goodput=" << goodputBps << "bps"
+                                   << " dynRef=" << dynamicRefBps << "bps"
+                                   << " dynMin=" << dynamicMinBps << "bps"
                                    << " normGoodput=" << normGoodput << " rtt=" << m_currentRttMs
                                    << "ms"
                                    << " rttPenalty=" << rttPenalty << " tcpPenalty=" << tcpPenalty
-                                   << " rlfTerm=" << rlfTerm << " reward=" << reward);
+                                   << " rlfTerm=" << rlfTerm << " tbsBonus=" << tbsBonus
+                                   << " hoPenalty=" << handoverPenalty
+                                   << " rsrpDelta=" << rsrpDeltaBonus
+                                   << " reward=" << reward);
 
-    // std::cout << "Reward: goodput=" << goodputBps << "bps"
-    //           << " normGoodput=" << normGoodput << " rtt=" << m_currentRttMs << "ms"
-    //           << " rttPenalty=" << rttPenalty << " tcpPenalty=" << tcpPenalty
-    //           << " rlfTerm=" << rlfTerm << " reward=" << reward << std::endl;
-
-    // --- 6. Send reward to agent ---
+    // --- 10. Send reward to agent ---
     auto rewardContainer = MakeDictBoxContainer<double>(1, "reward", reward);
     Send(rewardContainer);
 

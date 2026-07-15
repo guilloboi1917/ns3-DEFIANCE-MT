@@ -7,8 +7,9 @@
 using namespace ns3;
 
 double ueSpeed = 20.0;            // m/s
-double simDuration = 50.0;        // seconds
+double simDuration = 80.0;        // seconds
 double intersiteDistance = 500.0; // m
+uint32_t numMacroCells = 7;       // number of macro cells
 double enbDowntilt = 10.0;        // degrees
 uint32_t seed = 0;                // Seed for RNG
 uint32_t runId = 0;
@@ -25,16 +26,16 @@ double g_aerialUeRatio = 0.0;
 bool g_logging = false;
 bool rlMode = false;
 std::string handoverAlgorithm = "a3";
-uint32_t stepTime = 240; // ms (aligned with MS480 measurement interval)
+uint32_t stepTime = 200; // ms (aligned with ReportUeMeasurements filter period)
 uint32_t delay = 0;      // ms
 double handoverPenalty = 0.01;
-double rlReferenceRate = 5000000.0; // bps (5 Mbps)
+double rlReferenceRate = 5000000.0;        // bps (5 Mbps)
 double rlMinAcceptableGoodput = 2500000.0; // bps (2.5 Mbps)
-double rlDelayMinRttMs = 55.0;
+double rlDelayMinRttMs = 40.0;
 double rlMaxAcceptableRttMs = 100.0;
 double tcpFailurePenalty = 0.5;
 double rlfPenalty = 1.0;
-double handoverMargin = 3.0;
+double handoverMargin = -5.0;
 int parallel = 0;
 
 // global variables (must be defined before the #include below since
@@ -98,6 +99,9 @@ main(int argc, char* argv[])
     cmd.AddValue("intersiteDistance",
                  "Distance between the two eNodeBs in meters",
                  intersiteDistance);
+    cmd.AddValue("numMacroCells",
+                 "Number of Macro Cells in the Simulation, (4, 7, 19)",
+                 numMacroCells);
     cmd.AddValue("enbDowntilt", "Downtilt of the eNodeB antennas in degrees", enbDowntilt);
     cmd.AddValue("seed", "Seed for random number generator", seed);
     cmd.AddValue("runId",
@@ -179,6 +183,7 @@ main(int argc, char* argv[])
     scenarioSetup(ueSpeed,
                   simDuration,
                   intersiteDistance,
+                  numMacroCells,
                   enbDowntilt,
                   seed,
                   runId,

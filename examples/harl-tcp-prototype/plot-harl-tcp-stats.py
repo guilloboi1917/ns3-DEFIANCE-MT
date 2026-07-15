@@ -3,6 +3,7 @@
 import sys
 
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 import pandas as pd
 import os
 import numpy as np
@@ -40,6 +41,27 @@ def bin_count(df, bin_width=0.2):
     return bin_centers, counts
 
 
+def _insert_nan_at_gaps(t, y, max_gap):
+    """
+    Insert NaN between consecutive points when the time gap exceeds max_gap.
+    This breaks the line in step() plots, preventing misleading connecting
+    lines across long gaps (e.g. TCP death periods).
+
+    Returns (t_out, y_out) with NaN separators inserted.
+    """
+    if len(t) < 2:
+        return t, y
+    t_out = []
+    y_out = []
+    for i in range(len(t)):
+        if i > 0 and (t[i] - t[i - 1]) > max_gap:
+            t_out.append(np.nan)
+            y_out.append(np.nan)
+        t_out.append(t[i])
+        y_out.append(y[i])
+    return np.array(t_out), np.array(y_out)
+
+
 def cumulative_bytes(df):
     """
     Return cumulative bytes over time from a DataFrame with columns
@@ -70,13 +92,15 @@ def main(argv=None):
     PACING_FILE = data_dir + '/harl-tcp-pacing-gain.csv'
     CWND_GAIN_FILE = data_dir + '/harl-tcp-cwnd-gain.csv'
     DELIVERY_RATE_FILE = data_dir + '/harl-tcp-rate.csv'
-    RSRP_SINR_FILE = data_dir + '/rsrp_sinr.csv'
     UL_SINR_FILE = data_dir + '/ul_sinr.csv'
     MSC_FILE = data_dir + '/mcs.csv'
     RETRANS_FILE = data_dir + '/retransmissions.csv'
     SINK_FILE = data_dir + '/sink-packets.csv'
     SOURCE_FILE = data_dir + '/source-packets.csv'
     TX_POWER_FILE = data_dir + '/ue_tx_power.csv'
+    RSRP_RSRQ_200ms = data_dir + '/ue_meas_report.csv'
+    RSRP_SINR_FILE = data_dir + '/rsrp_sinr.csv'
+    REWARD_FILE = data_dir + '/rl_reward.csv'
 
     if not os.path.exists(CWND_FILE):
         print(f"CWND data file not found: {CWND_FILE}")
@@ -87,7 +111,8 @@ def main(argv=None):
     # Multiple CWND updates can happen at the same timestamp (burst of ACKs).
     # Keep only the last value per timestamp to avoid vertical line artifacts.
     # Filter out any values larger than uint32 max (shouldn't happen, but just in case of logging bugs).
-    cwnd = cwnd[cwnd["cwnd"] <= 4 * 1024 * 1024]  # 4 GB in bytes, well above any reasonable CWND
+    # 4 GB in bytes, well above any reasonable CWND
+    cwnd = cwnd[cwnd["cwnd"] <= 4 * 1024 * 1024]
     cwnd = cwnd.drop_duplicates(subset="time", keep="last").sort_values("time")
 
     ho = pd.read_csv(HO_FILE, header=None, names=["time", "cellId"]) \
@@ -113,16 +138,11 @@ def main(argv=None):
     delivery_rate = delivery_rate.drop_duplicates(
         subset="time", keep="last").sort_values("time")
 
-    rsrp_sinr = pd.read_csv(RSRP_SINR_FILE, header=None, names=["time", "cellId", "rnti", "rsrp", "sinr"]) \
-        if os.path.exists(RSRP_SINR_FILE) else None
-
-    if rsrp_sinr is not None and not rsrp_sinr.empty:
-        rsrp_sinr["rsrp"] = 10 * np.log10(rsrp_sinr["rsrp"].clip(lower=1e-15) * 1000)
-        # Use rolling average
-        rsrp_sinr["sinr"] = rsrp_sinr["sinr"].rolling(window=20, min_periods=1).median()
-
-        # Apply a ewma to rsrp
-        rsrp_sinr["rsrp_ewma"] = rsrp_sinr["rsrp"].ewm(alpha=0.005, adjust=False).mean()
+    rsrp_rsrq_full = pd.read_csv(RSRP_RSRQ_200ms, header=None,
+                                names=["time", "cellId", "rnti", "rsrp", "rsrq", "isServingCell"]) \
+        if os.path.exists(RSRP_RSRQ_200ms) else None
+    rsrp_rsrq = rsrp_rsrq_full[rsrp_rsrq_full["isServingCell"] == 1].copy() \
+        if rsrp_rsrq_full is not None and not rsrp_rsrq_full.empty else None
 
     ul_sinr = pd.read_csv(UL_SINR_FILE, header=None, names=["time", "cellId", "rnti", "sinr"]) \
         if os.path.exists(UL_SINR_FILE) else None
@@ -146,6 +166,13 @@ def main(argv=None):
         mcs["theoretical_rate"] = mcs["mcs"].apply(
             lambda x: TransportBlockSizeTable[int(McsToItbsUl[int(x)])] / TTI / 1e6)  # Convert to Mbps
 
+    # ── New data: rl_reward (EWMA reward components) ──
+    rsrp_sinr = pd.read_csv(RSRP_SINR_FILE, header=None, names=["time", "cellId", "rnti", "rsrp", "sinrDb"]) \
+        if os.path.exists(RSRP_SINR_FILE) else None
+
+    rl_reward = pd.read_csv(REWARD_FILE, header=None, names=["time", "goodput_mbps", "dynRef_mbps", "dynMin_mbps", "normGoodput", "rtt_ms", "rttPenalty", "tcpPenalty", "rlfTerm", "tbsBonus", "handoverPenalty", "rsrpDeltaBonus", "reward"]) \
+        if os.path.exists(REWARD_FILE) else None
+
     # ── New data: retransmissions, sink (goodput), source (throughput) ──
     retrans = pd.read_csv(RETRANS_FILE, header=None, names=["time", "size"]) \
         if os.path.exists(RETRANS_FILE) else None
@@ -156,12 +183,26 @@ def main(argv=None):
     source = pd.read_csv(SOURCE_FILE, header=None, names=["time", "size"]) \
         if os.path.exists(SOURCE_FILE) else None
 
-    # ── 4x2 layout ──────────────────────────────────────────────────────
-    fig, axes = plt.subplots(4, 2, figsize=(12, 10), sharex=True)
-    (ax1, ax2), (ax3, ax4), (ax5, ax6), (ax7, ax8) = axes
+    # ── 6x2 layout ──────────────────────────────────────────────────────
+    fig = plt.figure(figsize=(12, 17))
+    gs = gridspec.GridSpec(6, 2, figure=fig)
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax2 = fig.add_subplot(gs[0, 1])
+    ax3 = fig.add_subplot(gs[1, 0])
+    ax4 = fig.add_subplot(gs[1, 1])
+    ax5 = fig.add_subplot(gs[2, 0])
+    ax6 = fig.add_subplot(gs[2, 1])
+    ax7 = fig.add_subplot(gs[3, 0])
+    ax8 = fig.add_subplot(gs[3, 1])
+    ax9 = fig.add_subplot(gs[4, :])
+    ax10 = fig.add_subplot(gs[5, :])
 
-    for ax in axes.flatten():
+    for ax in [ax1, ax2, ax3, ax4, ax5, ax6, ax7, ax8, ax9, ax10]:
         ax.minorticks_on()
+
+    # Share x-axis across all subplots
+    for ax in [ax2, ax3, ax4, ax5, ax6, ax7, ax8, ax9, ax10]:
+        ax.sharex(ax1)
 
     all_times = [cwnd["time"].max()]
     if rtt is not None:
@@ -170,12 +211,14 @@ def main(argv=None):
         all_times.append(pacing_gain["time"].max())
     if delivery_rate is not None:
         all_times.append(delivery_rate["time"].max())
-    if rsrp_sinr is not None:
-        all_times.append(rsrp_sinr["time"].max())
+    if rsrp_rsrq is not None:
+        all_times.append(rsrp_rsrq["time"].max())
     if ul_sinr is not None:
         all_times.append(ul_sinr["time"].max())
     if source is not None:
         all_times.append(source["time"].max())
+    if rl_reward is not None:
+        all_times.append(rl_reward["time"].max())
 
     max_time = max(all_times)
 
@@ -192,7 +235,9 @@ def main(argv=None):
     # (1,2) RTT
     # ═══════════════════════════════════════════════════════════════════
     if rtt is not None and not rtt.empty:
-        ax2.step(rtt["time"], rtt["rtt"], linewidth=1.0, color="tab:blue")
+        # Break line at gaps > 200ms (RTT updates per ACK, ~6ms interval)
+        t_rtt, y_rtt = _insert_nan_at_gaps(rtt["time"].values, rtt["rtt"].values, 0.2)
+        ax2.step(t_rtt, y_rtt, linewidth=1.0, color="tab:blue", where="post")
         ax2.set_ylabel("Round Trip Time (ms)")
         ax2.set_title("TCP Round Trip Time over Time")
         ax2.grid(True)
@@ -208,24 +253,27 @@ def main(argv=None):
                  linewidth=1.0, color="tab:purple", where="post")
         ax3.set_ylabel("Pacing Gain")
         ax3.set_ylim(0, 2.5)
-        ax3.axhline(y=1.0, color="gray", linestyle=":", alpha=0.4, linewidth=0.5)
+        ax3.axhline(y=1.0, color="gray", linestyle=":",
+                    alpha=0.4, linewidth=0.5)
         ax3.grid(True)
 
     # ═══════════════════════════════════════════════════════════════════
     # (2,2) Delivery Rate + Theoretical Max Rate
     # ═══════════════════════════════════════════════════════════════════
     if delivery_rate is not None and not delivery_rate.empty:
-        ax4.step(delivery_rate["time"], delivery_rate["rate"] /
-                 1e6, linewidth=1.0, color="tab:red")
+        # Break line at gaps > 200ms (delivery rate updates per ACK, ~6ms interval)
+        t_dr, y_dr = _insert_nan_at_gaps(delivery_rate["time"].values,
+                                          delivery_rate["rate"].values / 1e6, 0.2)
+        ax4.step(t_dr, y_dr, linewidth=1.0, color="tab:red", where="post")
         ax4.set_ylabel("Delivery Rate (Mbps)")
         ax4.set_title("Delivery Rate over Time")
         ax4.grid(True)
     if mcs is not None and not mcs.empty:
-        ax4.step(mcs["time"], mcs["theoretical_rate"], linewidth=1.0,
-                 color="tab:cyan", label="Theoretical Max Rate")
+        # ax4.step(mcs["time"], mcs["theoretical_rate"], linewidth=1.0,
+        #          color="tab:cyan", label="Theoretical Max Rate")
         ax4.legend(fontsize=8)
-        ax4.step(mcs["time"], mcs["tbs"] / 125, linewidth=0.8, color="tab:orange", 
-                 label="Transport Block Size (bits)", alpha=0.7)
+        ax4.step(mcs["time"], mcs["tbs"] / 125, linewidth=0.3, color="tab:orange",
+                 label="PHY throughput (Mbps)", alpha=0.7)
 
     # ═══════════════════════════════════════════════════════════════════
     # (3,1) MCS Index + UE TX Power
@@ -261,6 +309,15 @@ def main(argv=None):
         t_snk, gput = bin_data_mbps(sink)
         ax6.step(t_snk, gput, linewidth=1.0, color="tab:purple",
                  label="Goodput (sink)", alpha=0.8)
+
+        # Compute EWMA of goodput directly from sink data (200ms bins, alpha=0.2)
+        # to match what the reward app computes in C++
+        gput_series = pd.Series(gput, index=t_snk)
+        ewma_gput = gput_series.ewm(alpha=0.2).mean()
+        ax6.plot(ewma_gput.index, ewma_gput.values, linewidth=1.0,
+                 color="tab:orange", linestyle="--", alpha=0.8,
+                 label="Goodput EWMA (alpha=0.1)")
+
         t_snk_cum, snk_cum = cumulative_bytes(sink)
         ax6b.step(t_snk_cum, snk_cum / 1e6, linewidth=1.0, color="tab:purple",
                   linestyle="--", label="Goodput (cum. MB)", alpha=0.6)
@@ -273,36 +330,83 @@ def main(argv=None):
     # Combined legend
     lines1, labels1 = ax6.get_legend_handles_labels()
     lines2, labels2 = ax6b.get_legend_handles_labels()
-    ax6.legend(lines1 + lines2, labels1 + labels2, fontsize=6, loc="upper left")
+    ax6.legend(lines1 + lines2, labels1 + labels2,
+               fontsize=6, loc="upper left")
 
     # ═══════════════════════════════════════════════════════════════════
-    # (4,1) RSRP
+    # (4,1) RSRP / RSRQ / SINR (200ms serving cell)
     # ═══════════════════════════════════════════════════════════════════
-    if rsrp_sinr is not None and not rsrp_sinr.empty:
-        ax7.plot(rsrp_sinr["time"], rsrp_sinr["rsrp"], linewidth=0.8, color="tab:orange")
+    if rsrp_rsrq is not None and not rsrp_rsrq.empty:
+        ax7.plot(rsrp_rsrq["time"], rsrp_rsrq["rsrp"], linewidth=1.2,
+                 color="tab:orange", label="RSRP 200ms serving")
         ax7.set_ylabel("RSRP (dBm)")
-        ax7.set_title("RSRP and SINR over Time")
+        ax7.set_title("Serving Cell RSRP, RSRQ and SINR")
         ax7.grid(True)
-        # twinx for SINR
+        ax7.legend(fontsize=6, loc="upper left")
+        # twinx for RSRQ + SINR
         ax7b = ax7.twinx()
-        ax7b.plot(rsrp_sinr["time"], rsrp_sinr["sinr"], linewidth=0.8,
-                  color="tab:green", linestyle="--", alpha=0.7, label="DL SINR")
+        ax7b.plot(rsrp_rsrq["time"], rsrp_rsrq["rsrq"], linewidth=0.8,
+                  color="tab:purple", linestyle=":", alpha=0.7,
+                  label="RSRQ 200ms serving")
         if ul_sinr is not None and not ul_sinr.empty:
             ax7b.plot(ul_sinr["time"], ul_sinr["sinr"], linewidth=0.8,
-                      color="tab:blue", linestyle="-.", alpha=0.7, label="UL SINR")
-        ax7b.set_ylabel("SINR (dB)")
+                      color="tab:blue", linestyle="-.", alpha=0.7, label="UL SINR serving")
+        if rsrp_sinr is not None and not rsrp_sinr.empty:
+            # Apply median moving average filter (window=10 ~ 10ms at 1ms SRS)
+            dl_sinr_smooth = rsrp_sinr["sinrDb"].rolling(window=10, center=True, min_periods=1).median()
+            ax7b.plot(rsrp_sinr["time"], dl_sinr_smooth, linewidth=0.8,
+                      color="tab:green", linestyle=":", alpha=0.7, label="DL SINR (serving)")
+        ax7b.set_ylabel("RSRQ / SINR (dB)")
         ax7b.legend(fontsize=6, loc="upper right")
 
     # ═══════════════════════════════════════════════════════════════════
-    # (4,2) Retransmissions (binned count)
+    # (4,2) Reward Components (EWMA-based adaptive reward)
     # ═══════════════════════════════════════════════════════════════════
-    if retrans is not None and not retrans.empty:
-        t_ret, cnt = bin_count(retrans)
-        ax8.bar(t_ret, cnt, width=0.18, color="tab:red", alpha=0.7,
-                edgecolor="tab:red", linewidth=0.3)
-        ax8.set_ylabel("Retransmissions (count)")
-    ax8.set_title("Retransmissions (200 ms bins)")
-    ax8.grid(True)
+    if rl_reward is not None and not rl_reward.empty:
+        t = rl_reward["time"]
+
+        # Goodput (from sink) vs dynamicRef/dynamicMin
+        ax8.plot(t, rl_reward["goodput_mbps"], linewidth=1.0, color="tab:purple",
+                 label="Goodput (sink Mbps)")
+        ax8.plot(t, rl_reward["dynRef_mbps"], linewidth=0.8, color="tab:green",
+                 linestyle="--", label="dynRef (EWMA x 1.1)")
+        ax8.plot(t, rl_reward["dynMin_mbps"], linewidth=0.8, color="tab:olive",
+                 linestyle=":", label="dynMin (EWMA x 0.3)")
+
+        # Compute and plot EWMA goodput (for reference)
+        ewma = rl_reward["goodput_mbps"].ewm(alpha=0.2).mean()
+        ax8.plot(t, ewma, linewidth=0.8, color="tab:orange",
+                 linestyle="--", alpha=0.7, label="Goodput EWMA (alpha=0.2)")
+
+        ax8.set_ylabel("Throughput (Mbps)")
+        ax8.set_title("Reward Components: Goodput, EWMA Ref, TBS Bonus")
+        ax8.grid(True)
+
+        # Twin axis for normalized reward values
+        ax8b = ax8.twinx()
+        ax8b.plot(t, rl_reward["normGoodput"], linewidth=0.8, color="tab:blue",
+                  linestyle="--", alpha=0.6, label="normGoodput")
+        ax8b.plot(t, rl_reward["tbsBonus"], linewidth=0.8, color="tab:cyan",
+                  linestyle="--", alpha=0.6, label="TBS bonus")
+        ax8b.plot(t, rl_reward["reward"], linewidth=1.2, color="tab:red",
+                  label="Reward (total)")
+        ax8b.axhline(y=0, color="gray", linestyle=":", alpha=0.3, linewidth=0.5)
+        ax8b.set_ylabel("Normalized reward components")
+
+        # Combined legend
+        lines1, labels1 = ax8.get_legend_handles_labels()
+        lines2, labels2 = ax8b.get_legend_handles_labels()
+        ax8.legend(lines1 + lines2, labels1 + labels2,
+                   fontsize=5, loc="upper left")
+    else:
+        # Fallback: retransmissions if no reward data
+        if retrans is not None and not retrans.empty:
+            t_ret, cnt = bin_count(retrans)
+            ax8.bar(t_ret, cnt, width=0.18, color="tab:red", alpha=0.7,
+                    edgecolor="tab:red", linewidth=0.3)
+            ax8.set_ylabel("Retransmissions (count)")
+        ax8.set_title("Retransmissions (200 ms bins)")
+        ax8.grid(True)
     # if rsrp_sinr is not None and not rsrp_sinr.empty:
     #     ax8.plot(rsrp_sinr["time"], rsrp_sinr["rsrp"], linewidth=0.8, color="tab:orange")
     #     ax8.set_ylabel("RSRP (dBm)")
@@ -313,7 +417,82 @@ def main(argv=None):
     # ═══════════════════════════════════════════════════════════════════
     # Handover markers on all axes
     # ═══════════════════════════════════════════════════════════════════
-    all_axes = [ax1, ax2, ax3, ax4, ax5, ax6, ax7, ax8]
+    # ═══════════════════════════════════════════════════════════════════
+    # (5,1) RSRP all cells + serving cell highlight
+    # ═══════════════════════════════════════════════════════════════════
+    if rsrp_rsrq_full is not None and not rsrp_rsrq_full.empty:
+        cell_ids = sorted(rsrp_rsrq_full["cellId"].unique())
+        colors = plt.cm.gist_ncar(np.linspace(0, 0.9, len(cell_ids)))
+        for idx, cell_id in enumerate(cell_ids):
+            cell_data = rsrp_rsrq_full[rsrp_rsrq_full["cellId"] == cell_id]
+            ax9.plot(cell_data["time"], cell_data["rsrp"], linewidth=0.6,
+                     color=colors[idx], alpha=0.5,
+                     label=f"Cell {int(cell_id)}")
+        # Overlay serving cell RSRP with thicker lines, split at gaps to avoid
+        # connecting non-contiguous serving periods (e.g. across handovers).
+        serving_data = rsrp_rsrq_full[rsrp_rsrq_full["isServingCell"] == 1].copy()
+        if not serving_data.empty:
+            for idx, cell_id in enumerate(cell_ids):
+                seg = serving_data[serving_data["cellId"] == cell_id]
+                if not seg.empty:
+                    seg = seg.sort_values("time")
+                    # Gap > 300ms = handover away and back; split into segments
+                    gap_threshold = 0.3
+                    seg = seg.reset_index(drop=True)
+                    seg["_gap"] = seg["time"].diff() > gap_threshold
+                    seg["_segment"] = seg["_gap"].cumsum()
+                    for _, segment in seg.groupby("_segment"):
+                        # Draw at least a marker for single-point segments (rapid handovers)
+                        if len(segment) >= 2:
+                            ax9.plot(segment["time"], segment["rsrp"], linewidth=1.2,
+                                     color=colors[idx], alpha=1.0)
+                        elif len(segment) == 1:
+                            ax9.plot(segment["time"], segment["rsrp"], marker="o",
+                                     markersize=4, color=colors[idx], alpha=1.0, linestyle="")
+        ax9.set_ylabel("RSRP (dBm)")
+        ax9.set_title("RSRP per Cell (200ms ReportUeMeasurements)")
+        ax9.grid(True)
+        ax9.set_xlabel("")
+
+    # Place the legend to the right of ax9 to avoid hiding data
+    ax9.legend(fontsize=6, loc="upper left", bbox_to_anchor=(1.02, 1.0))
+
+    # ═══════════════════════════════════════════════════════════════════
+    # (6,1) RSRQ all cells + serving cell highlight
+    # ═══════════════════════════════════════════════════════════════════
+    if rsrp_rsrq_full is not None and not rsrp_rsrq_full.empty:
+        cell_ids = sorted(rsrp_rsrq_full["cellId"].unique())
+        colors = plt.cm.gist_ncar(np.linspace(0, 0.9, len(cell_ids)))
+        for idx, cell_id in enumerate(cell_ids):
+            cell_data = rsrp_rsrq_full[rsrp_rsrq_full["cellId"] == cell_id]
+            ax10.plot(cell_data["time"], cell_data["rsrq"], linewidth=0.6,
+                      color=colors[idx], alpha=0.5,
+                      label=f"Cell {int(cell_id)}")
+        # Overlay serving cell RSRQ with thicker lines, split at gaps
+        serving_data = rsrp_rsrq_full[rsrp_rsrq_full["isServingCell"] == 1].copy()
+        if not serving_data.empty:
+            for idx, cell_id in enumerate(cell_ids):
+                seg = serving_data[serving_data["cellId"] == cell_id]
+                if not seg.empty:
+                    seg = seg.sort_values("time")
+                    gap_threshold = 0.3
+                    seg = seg.reset_index(drop=True)
+                    seg["_gap"] = seg["time"].diff() > gap_threshold
+                    seg["_segment"] = seg["_gap"].cumsum()
+                    for _, segment in seg.groupby("_segment"):
+                        if len(segment) >= 2:
+                            ax10.plot(segment["time"], segment["rsrq"], linewidth=1.2,
+                                      color=colors[idx], alpha=1.0)
+                        elif len(segment) == 1:
+                            ax10.plot(segment["time"], segment["rsrq"], marker="o",
+                                      markersize=4, color=colors[idx], alpha=1.0, linestyle="")
+        ax10.set_ylabel("RSRQ (dB)")
+        ax10.set_title("RSRQ per Cell (200ms ReportUeMeasurements)")
+        ax10.grid(True)
+        ax10.set_xlabel("Time (s)")
+    ax10.legend(fontsize=6, loc="upper left", bbox_to_anchor=(1.02, 1.0))
+
+    all_axes = [ax1, ax2, ax3, ax4, ax5, ax6, ax7, ax8, ax9, ax10]
     if ho is not None and not ho.empty:
         # Draw a single invisible line to create one shared legend entry
         ax1.plot([], [], color="green", linestyle="--", linewidth=0.8,
@@ -322,8 +501,6 @@ def main(argv=None):
             for _, row in ho.iterrows():
                 ax.axvline(x=row["time"], color="green", linestyle="--",
                            alpha=0.5, linewidth=0.7)
-
-    ax8.set_xlabel("Time (s)")
 
     plt.tight_layout()
     out_path = script_dir + "/output/" + outfile

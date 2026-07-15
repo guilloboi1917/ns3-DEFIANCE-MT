@@ -62,7 +62,31 @@ def start_inference(env_name: str, load_checkpoint_path: str | Path, **ns3_setti
         else load_checkpoint_path
     )
 
-    # Create environment and restore checkpoint
+    # ── Detect action masking from checkpoint before creating env ────
+    # This avoids the old pattern of creating the env, detecting masking,
+    # then creating a second env — which left stale ns-3 processes.
+    is_action_masking = False
+    episode_reward = 0.0
+    step_count = 0
+    done = False
+
+    if _checkpoint_uses_rl_module(ckpt_path):
+        # === New RLModule API stack (PPO with optional action masking) ===
+        # Single-agent ID is always "agent_0" in this setup
+        agent_id = "agent_0"
+        module_path = ckpt_path / "learner_group" / "learner" / "rl_module" / agent_id
+        module = RLModule.from_checkpoint(str(module_path))
+        module.eval()
+
+        # Determine if module uses action masking by checking the loaded module type
+        is_action_masking = "ActionMasking" in type(module).__name__
+        if is_action_masking:
+            ns3_settings["useActionMasking"] = "true"
+    else:
+        # Old Policy API stack — need env to get agent_id for module path later
+        agent_id = "agent_0"
+
+    # ── Create environment once with correct settings ─────────────────
     env = Ns3MultiAgentEnv(
         targetName=env_name,
         ns3Path=NS3_HOME,
@@ -72,33 +96,9 @@ def start_inference(env_name: str, load_checkpoint_path: str | Path, **ns3_setti
     obs, info = env.reset()
     agent_id = first(obs)
 
-    episode_reward = 0.0
-    step_count = 0
-    done = False
-
-    # ── Restore checkpoint and run inference ──────────────────────────
+    # ── Run inference ─────────────────────────────────────────────────
     if _checkpoint_uses_rl_module(ckpt_path):
         # === New RLModule API stack (PPO with optional action masking) ===
-        module_path = ckpt_path / "learner_group" / "learner" / "rl_module" / agent_id
-        module = RLModule.from_checkpoint(str(module_path))
-        module.eval()
-
-        # Determine if module uses action masking by checking the loaded module type
-        is_action_masking = "ActionMasking" in type(module).__name__
-
-        # If using action masking, recreate env with the flag enabled
-        if is_action_masking:
-            ns3_settings["useActionMasking"] = "true"
-            env.close()
-            env = Ns3MultiAgentEnv(
-                targetName=env_name,
-                ns3Path=NS3_HOME,
-                ns3Settings=ns3_settings,
-                trial_name="inference",
-            )
-            obs, info = env.reset()
-            agent_id = first(obs)
-
         while not done:
             per_agent_obs = obs[agent_id]
 
@@ -143,17 +143,16 @@ def start_inference(env_name: str, load_checkpoint_path: str | Path, **ns3_setti
 
     else:
         # === Old Policy API stack (DQN/D3QN/SAC) ===
-        # Register env for RolloutWorker actors created by Algorithm.from_checkpoint()
-        from ray.tune import register_env
-        register_env("defiance", partial(create_env, env_name=env_name, ns3_settings=ns3_settings.copy()))
+        # Load policy directly from checkpoint without Algorithm.from_checkpoint(),
+        # which would create Ray rollout workers (each spawning an ns-3 process).
+        from ray.rllib.policy import Policy
+        policy_path = str(ckpt_path / "policies" / agent_id)
+        policy = Policy.from_checkpoint(policy_path)
 
-        algo = Algorithm.from_checkpoint(str(ckpt_path))
-
-        # Create preprocessor from the raw observation space (12-key Dict → 117-dim Box)
+        # Create preprocessor from the raw observation space
         from ray.rllib.models.preprocessors import get_preprocessor
         raw_space = env.observation_spaces[agent_id]
         preprocessor = get_preprocessor(raw_space)(raw_space)
-        policy = algo.get_policy(agent_id)
 
         while not done:
             flat_obs = preprocessor.transform(obs[agent_id])
@@ -197,7 +196,7 @@ def _build_ppo_config(
     env: Ns3MultiAgentEnv,
 ) -> AlgorithmConfig:
     """Apply PPO-specific training params."""
-    base_config.clip_rewards = 1.0  # Clamp rewards to [-1, 1] for stable value function
+    # base_config.clip_rewards = 1.0  # Clamp rewards to [-1, 1] for stable value function
     return (
         base_config.training(
             use_critic=True,
@@ -211,7 +210,7 @@ def _build_ppo_config(
             clip_param=0.2,
             vf_clip_param=200.0,
             grad_clip=10.0,
-            lr=0.0003,
+            lr=0.00005,
             gamma=0.99,
             num_epochs=10,
         )
@@ -244,7 +243,6 @@ def _build_sac_config(
     - train_batch_size controls replay buffer sampling, not on-policy batch
     - batch_mode must stay complete_episodes for ns-3
     """
-    base_config.clip_rewards = 1.0  # Clamp rewards to [-1, 1]
     base_config.batch_mode = "complete_episodes"  # ns-3 requirement
     base_config.simple_optimizer = True
     return (
@@ -253,13 +251,13 @@ def _build_sac_config(
         .resources(num_gpus=1 if HAS_GPU else 0)
         .training(
             twin_q=True,
-            initial_alpha=0.8,
+            initial_alpha=1.0,
             alpha_lr=0.0003,
             target_entropy="auto",
             actor_lr=3e-5,
-            critic_lr=3e-4,
+            critic_lr=5e-6,
             tau=0.005,
-            n_step=2,
+            n_step=5,
             gamma=0.99,
             train_batch_size=1024,
             num_steps_sampled_before_learning_starts=5000,
@@ -268,7 +266,7 @@ def _build_sac_config(
                 "type": "MultiAgentPrioritizedReplayBuffer",
                 "capacity": 100000,
                 "prioritized_replay_alpha": 0.6,
-                "prioritized_replay_beta": 0.4,
+                "prioritized_replay_beta": 0.6,
             },
         )
     )

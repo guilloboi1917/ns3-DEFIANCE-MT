@@ -1,9 +1,7 @@
 #include "ns3/lte-common.h"
 #include "ns3/lte-rrc-sap.h"
 #include "ns3/lte-ue-rrc.h"
-#include "ns3/mobility-module.h"
 #include "ns3/observation-application.h"
-#include "ns3/tcp-rate-ops.h"
 
 #include <cstdint>
 #include <vector>
@@ -16,17 +14,17 @@ namespace ns3
  * @brief Observation application for the HARL TCP handover RL agent.
  *
  * Runs on the UAV node and collects:
- * - RSRP/RSRQ per cell from eNB measurement reports
- * - SINR per cell from SRS-based UL SINR reports
- * - Current serving cell ID and RRC state
- * - UAV position (x, y, z) and velocity (vx, vy, vz)
- * - MCS index and UAV Tx power
- * - TCP congestion window (cwnd)
+ * - RSRP/RSRQ per cell from ReportUeMeasurements (200ms, already averaged by UE PHY)
+ * - SINR per cell from SRS-based UL SINR reports (EWMA-smoothed)
+ * - Current serving cell ID
+ * - Transport block size (TBS) from UL PHY transmission
  * - RTT
- * - BBR-specific metrics: delivery rate, BW estimate, inflight/BDP ratio, BBR state
  *
- * Observations are packaged as an OpenGymDictContainer and sent to the agent
- * at every StepTime interval.
+ * Observations are built and sent immediately after each ReportUeMeasurements
+ * batch completes (detected by simulation time advancing).
+ *
+ * Observation dict keys:
+ *   rsrps, rsrqs, sinr, rsrpDelta, rsrqDelta, sinrDelta, tbs, action_mask
  */
 class HarlTcpHandoverObservationApp : public ObservationApplication
 {
@@ -61,72 +59,50 @@ class HarlTcpHandoverObservationApp : public ObservationApplication
                          LteUeRrc::State oldState,
                          LteUeRrc::State newState);
 
-    /** Handle TCP congestion window changes. */
-    void ObserveCwnd(uint32_t oldCwnd, uint32_t newCwnd);
-
     /** Handle RTT changes. */
     void ObserveRtt(Time oldRtt, Time newRtt);
 
-    // --- BBR-specific callbacks ---
-
-    /** Handle TCP rate sample updates (delivery rate). */
-    void ObserveRateSample(const TcpRateOps::TcpRateSample& sample);
-
-    // --- UAV state callbacks ---
-
-    /** Handle UL transmission stats (MCS index). */
+    /** Handle UL transmission stats (MCS index, TBS). */
     void ObserveUlPhyTransmission(PhyTransmissionStatParameters param);
-
-    /** Handle PUSCH Tx power reports. */
-    void ObserveUeTxPower(uint16_t cellId, uint16_t rnti, double powerDbm);
 
   private:
     uint32_t m_numBs;            ///< Number of eNBs/cells in the scenario
-    uint32_t m_stepTimeMs;       ///< Observation interval in ms
+    uint32_t m_stepTimeMs;       ///< Expected ReportUeMeasurements cadence in ms
     uint32_t m_uavNodeId;        ///< Node ID of the UAV (for Config paths)
     double m_handoverMargin{3.0}; ///< RSRP margin (dB) for action mask
 
+    // EWMA smoothing factor for UL SINR (alpha=0.005 from pandas ewm analysis)
+    double m_ewmaAlpha{0.005};
+
     // Per-cell measurement storage
-    std::vector<double> m_rsrpValues;   ///< RSRP per cell in dBm (-200 = unknown)
-    std::vector<double> m_rsrqValues;   ///< RSRQ per cell in dB  (-200 = unknown)
-    std::vector<double> m_sinrValues;    ///< SINR per cell in dB (-40 = unknown)
+    std::vector<double> m_rsrpValues;   ///< RSRP per cell in dBm (-140 = unknown, from ReportUeMeasurements)
+    std::vector<double> m_rsrqValues;   ///< RSRQ per cell in dB  (-20 = unknown, from ReportUeMeasurements)
+    std::vector<double> m_sinrValues;   ///< Raw SINR per cell in dB (-40 = unknown, from eNB ReportUeSinr)
+    std::vector<double> m_sinrSmoothed; ///< EWMA-smoothed SINR per cell
 
     // UE state
     uint32_t m_currentCellId{0};         ///< Current serving cell ID
     uint16_t m_currentRrcState{0};       ///< Current RRC state
 
     // TCP metrics
-    int32_t m_currentCwnd{0};            ///< Current congestion window (bytes)
     int32_t m_currentRttMs{0};           ///< Current RTT (ms)
 
-    // TCP metrics
-    int32_t m_deliveryRateBps{0};        ///< TCP delivery rate (bps)
-
-    // UAV position and dynamics
-    Ptr<MobilityModel> m_uavMobility;    ///< Cached pointer to UAV's mobility model
-    double m_uavPosX{0.0};               ///< UAV position X (m)
-    double m_uavPosY{0.0};               ///< UAV position Y (m)
-    double m_uavPosZ{0.0};               ///< UAV position Z (m)
-    double m_uavVelX{0.0};               ///< UAV velocity X (m/s)
-    double m_uavVelY{0.0};               ///< UAV velocity Y (m/s)
-    double m_uavVelZ{0.0};               ///< UAV velocity Z (m/s)
-
     // Physical layer metrics
-    int32_t m_lastMcs{0};                ///< Last UL MCS index (0-28 for LTE)
-    double m_lastTxPowerDbm{0.0};        ///< Last PUSCH Tx power (dBm)
+    int64_t m_tbsSum{0};                 ///< Accumulated TBS bytes over current step
+    uint32_t m_tbsCount{0};              ///< Number of TBS samples in current step
 
     // Timing
-    Time m_lastSendTime{Seconds(0)};
+    Time m_lastReportTime{Seconds(0)}; ///< Timestamp of the last ReportUeMeasurements batch (to detect new cycles)
 
     // Previous-step snapshots for computing deltas
-    std::vector<double> m_lastRsrpSnapshot;  ///< RSRP values at last step (for delta)
-    std::vector<double> m_lastRsrqSnapshot;  ///< RSRQ values at last step (for delta)
-    double m_lastSinrSnapshot{-40.0};          ///< SINR at last step (for delta)
+    std::vector<double> m_lastRsrpSnapshot;  ///< RSRP at last step (for delta, from ReportUeMeasurements)
+    std::vector<double> m_lastRsrqSnapshot;  ///< RSRQ at last step (for delta, from ReportUeMeasurements)
+    double m_lastSinrSnapshot{-40.0};        ///< EWMA-smoothed SINR at last step (for delta)
 
     /** Build the current observation dict from cached values. */
     Ptr<OpenGymDictContainer> BuildObservation();
 
-    /** Periodic send of observation (scheduled at m_stepTimeMs intervals). */
+    /** Send observation immediately (called from ObserveUeRsrpRsrq on batch completion). */
     void SendObservation();
 };
 
