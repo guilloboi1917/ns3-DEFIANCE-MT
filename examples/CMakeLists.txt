@@ -186,6 +186,27 @@ build_lib_example(
 )
 
 build_lib_example(
+        NAME defiance-nr-rl-handover
+        SOURCE_FILES
+                nr-rl-handover/nr-rl-handover-scenario.cc
+                nr-rl-handover/handover-nr/nr-rl-handover-agent-app.cc
+                nr-rl-handover/handover-nr/nr-rl-handover-obs-app.cc
+                nr-rl-handover/handover-nr/nr-rl-handover-act-app.cc
+                nr-rl-handover/handover-nr/nr-rl-handover-rwd-app.cc
+        HEADER_FILES
+                nr-rl-handover/handover-nr/nr-rl-handover-agent-app.h
+                nr-rl-handover/handover-nr/nr-rl-handover-obs-app.h
+                nr-rl-handover/handover-nr/nr-rl-handover-act-app.h
+                nr-rl-handover/handover-nr/nr-rl-handover-rwd-app.h
+        LIBRARIES_TO_LINK
+                ${libapplications}
+                ${libflow-monitor}
+                ${libinternet}
+                ${libnr}
+                ${libdefiance}
+)
+
+build_lib_example(
         NAME defiance-sumo-test
         SOURCE_FILES sumo-test/sumo-example.cc
         LIBRARIES_TO_LINK
