@@ -1,0 +1,66 @@
+# run-agent training config — single source of truth for reproducible training.
+#
+# Launch with:
+#   run-agent train --config contrib/defiance/examples/nr-rl-handover/training_configs/train-sac-multiplicative.yaml
+#   (or from the repo root:  poetry run run-agent ... )
+#
+# Rules:
+#   - Every value below is a default; explicit CLI flags override per key,
+#     e.g. `-c parallel=8` or `-i 50`.
+#   - After merging, the EFFECTIVE config is written to the run's trial
+#     directory as meta.yaml — that file is itself a valid --config, so any
+#     finished run is reproducible with:
+#       run-agent train --config ~/ray_results/<exp>/<trial>/meta.yaml
+#
+# This file captures the current best setup:
+#   multiplicative reward (R = R_G * R_H), tbs observation zeroed
+#   (useTbsObservation=false), SAC with lowered target_entropy +
+#   initial_alpha (RL-AUDIT.md #16 + §9 — the auto entropy target ~= uniform
+#   parks the policy at uniform; see the SAC_2026-08-05_16-17-55 finding).
+
+type: train
+env_name: defiance-nr-rl-handover
+trainable: PPO
+iterations: 30
+max_episode_steps: 350        # simDuration/stepTime*1000; informational for multi-agent
+checkpoint_path: null         # or an experiment dir / checkpoint_N to resume
+rollout_fragment_length: null
+sample_timeout: 1200.0        # -st: rollout worker sample timeout (s)
+train_batch_size_per_learner: 2100   # -tbs: ~parallel x simDuration/stepTime
+evaluation_num_env_runners: 0        # -enr: 0 disables eval (current practice)
+evaluation_interval: 2
+evaluation_duration: "1"
+evaluation_sample_timeout: 600.0
+
+# RL algorithm hyperparameter overrides (-p key=value pairs). Passed to the
+# algorithm's `.training()` (SACConfig/PPOConfig/DQNConfig), so any
+# .training() parameter works: initial_alpha, target_entropy, alpha_lr, tau,
+# n_step, actor_lr, critic_lr, gamma, train_batch_size, entropy_coeff, lr,
+# ... Unknown keys raise a loud TypeError at startup.
+training_params:
+  # initial_alpha: 0.6
+  # target_entropy: 0.9         # ~0.5*log(6): lets the equilibrium policy commit
+  # alpha_lr: 0.03
+
+# ns-3 run parameters (-c key=value pairs)
+ns3_settings:
+  parallel: "7"
+  simDuration: "70"
+  topology: triangle
+  rlMode: "true"
+  rlBetaHandover: 2
+  handoverAlgorithm: agent
+  transportProtocol: udp
+  flowDirection: dl
+  addInterferingUes: "0"
+  stepTime: "200"
+  rlRewardComposition: multiplicative
+  rlPingPongMultiplier: "8"      # raised: meaningful contrast at low beta
+  rlHandoverRatePenalty: "true"  # windowed signaling-budget penalty
+  rlHandoverRateWindowMs: "10000"
+  rlHandoverRateBudget: "2"      # <=2 handovers per 10 s free
+  rlHandoverRateLambda: "0.2"    # marginal penalty per excess handover
+  rlTopN: "3"                    # actions 0..3; serving cell excluded from ranking
+  rlHandoverDebounceMs: "0"   # min interval between EXECUTED handovers; 0 = off
+  useTbsObservation: "false"
+  logging: "false"

@@ -1,6 +1,8 @@
 #include "ns3/reward-application.h"
 
 #include <cstdint>
+#include <deque>
+#include <string>
 #include <vector>
 
 namespace ns3
@@ -11,33 +13,29 @@ class Packet;
 
 /**
  * @ingroup defiance
- * @brief Reward application for the NR RL handover agent.
+ * @brief Reward application for the NR RL handover agent (Deng-style formulation).
  *
- * Runs on the UAV node. Measures UL or DL throughput via the PacketSink Rx trace
- * depending on --flowDirection. The reward is:
+ * Runs on the UAV node. Measures DL goodput via the PacketSink Rx trace.
+ * Reward follows Deng et al. (Paper 5) weighted KPI formulation:
  *
- *   reward = normGoodput - rttPenalty - tcpPenalty - rlfTerm + tbsBonus
+ *   R = alpha * R_G + (1 - alpha) * R_H
  *
- * where:
- *   normGoodput:
- *      1.0                                    if goodput >= dynamicRef
- *      (goodput - dynamicMin) / (ref - min)   if dynamicMin <= goodput < dynamicRef
- *      (goodput - dynamicMin) / dynamicMin    if goodput < dynamicMin (negative)
+ *   R_G = 1 / (1 + beta_G * max(0, 1 - normGoodput))
+ *   R_H = 1 / (1 + beta_H * I_ho)
  *
- *   dynamicRef = m_ewmaGoodput x 1.1   (EWMA of actual goodput, ~10% margin)
- *   dynamicMin = m_ewmaGoodput x 0.3   (30% of EWMA goodput)
+ * normGoodput uses a fixed upper-bound reference (m_goodputRefBps, the OnOff
+ * data rate) by default. The old EWMA-adaptive reference is retained behind
+ * m_useEwmaReference for easy reversal.
  *
- *   This creates a lagging reference: after a good handover, goodput rises
- *   above the EWMA, pushing normGoodput above 1.0 for several steps until
- *   the EWMA catches up. This transient overshoot is the improvement signal.
+ * Two mechanisms prevent excessive handovers:
  *
- *   tbsBonus = small bonus for being on a cell with high PHY potential
- *              (TBS throughput, capped at 0.3)
+ * 1. Handover hangover: I_ho stays true for N steps after each handover
+ *    (m_handoverHangoverLength, default 4). This makes the penalty persist
+ *    beyond the exact step where the handover fired.
  *
- *   rttPenalty:
- *      0.0                                    if rtt <= delayMinRtt
- *      (rtt - delayMinRtt) / (maxRtt - delayMinRtt)  if delayMinRtt < rtt < maxRtt
- *      1.0                                    if rtt >= maxAcceptableRtt
+ * 2. Ping-pong penalty: If the agent bounces back to the cell it just left
+ *    (A->B->A pattern), beta_H is multiplied by m_pingPongBetaMultiplier
+ *    (default 3.0) for that step only.
  */
 class NrRlHandoverRewardApp : public RewardApplication
 {
@@ -53,38 +51,62 @@ class NrRlHandoverRewardApp : public RewardApplication
     /** Callback: track every packet received by the PacketSink. */
     void ObserveSinkRx(Ptr<const Packet> packet, const Address& from);
 
-    /** Callback: track current RTT from TCP socket. */
-    void ObserveRtt(Time oldRtt, Time newRtt);
+    /** Callback: track transport block size (DL or UL depending on flowDirection). */
+    void ObserveTbs(uint64_t imsi, uint64_t tbSize);
 
-    /** Callback: track UL/DL PHY transmission stats (TBS) for adaptive reference rate. */
-    void ObserveUlTbs(uint64_t imsi, uint64_t tbSize);
+    /** Callback: track handover events for I_ho indicator and ping-pong detection. */
+    void ObserveHandover(const uint64_t imsi, const uint16_t cellId, const uint16_t rnti);
 
   private:
-    double m_handoverPenalty{0.01};                 ///< Penalty per handover (norm units) — currently unused
-    double m_referenceRateBps{5000000.0};           ///< Reference rate for throughput normalization (5 Mbps)
-    double m_minimumAcceptableGoodputBps{2500000.0}; ///< Min acceptable goodput (R_min)
-    double m_delayMinRttMs{55.0};                    ///< Lower bound RTT (ms) — zero delay penalty below this
-    double m_maxAcceptableRttMs{100.0};              ///< Upper bound RTT (ms) — penalty clamped at 1 above this
-    double m_tcpFailurePenalty{0.5};                 ///< Penalty per step when TCP is dead
-    double m_rlfPenalty{1.0};                        ///< One-time penalty when RLF is detected
-    Time m_calculationInterval{MilliSeconds(200)};   ///< Reward step interval (aligned with ReportUeMeasurements)
-    uint32_t m_remoteHostNodeId{0};                  ///< Node ID of remote host for trace
-    uint32_t m_lastTotalHandovers{0};                ///< Handover count at last reward step (tracking only)
-    uint64_t m_sinkBytesReceived{0};                 ///< Bytes received this step
-    int32_t m_currentRttMs{30};                      ///< Latest RTT sample (ms)
+    // --- Deng-style reward parameters ---
+    double m_alphaGoodput{0.8};          ///< Weight for goodput term (0..1)
+    double m_betaGoodput{5.0};           ///< Goodput sensitivity for (1+beta*(1-normG))^-1 (deng shape only)
+    double m_betaHandover{60.0};         ///< Handover sensitivity for (1+beta*I_ho)^-1
+    std::string m_rewardComposition{"additive"}; ///< additive | multiplicative
 
-    // EWMA-based adaptive reference
-    double m_ewmaGoodput{0.0};                       ///< EWMA of actual goodput (bps)
-    double m_ewmaAlpha{0.2};                         ///< EWMA smoothing factor (5-step ~1s window)
-    bool m_tcpPenaltyApplied{false};                 ///< True once the one-shot TCP penalty has been applied
+    // --- R_G functional shape (deng | linear | exp_decay | compl_pwr) ---
+    std::string m_rewardGoodputShape{"deng"}; ///< R_G mapping; deng = inverse, linear = x,
+                                              ///< exp_decay = 1-exp(-alpha*x), compl_pwr = 1-(1-x)^p
+    double m_rewardGoodputAlpha{3.0};    ///< exp_decay rate (gradient alpha*exp(-alpha*x))
+    double m_rewardGoodputP{0.4};        ///< compl_pwr exponent (0<p<1; gradient grows near x=1)
 
-    // TBS bonus (cell quality signal)
-    std::vector<int32_t> m_tbsHistory;               ///< TBS samples accumulated over current step
-    double m_tbsBonusWeight{0.003};                  ///< Bonus per Mbps of TBS throughput (capped at 0.3)
-    uint32_t m_uavNodeId{0};                         ///< Node ID of the UAV (for trace connection)
+    // --- Goodput normalization reference ---
+    double m_goodputRefBps{40e6};        ///< Fixed reward reference (near achievable throughput)
+    bool m_useEwmaReference{false};      ///< If true, use EWMA-adaptive reference (old behavior)
+    double m_ewmaGoodput{0.0};           ///< EWMA of actual goodput (bps, EWMA path only)
+    double m_ewmaAlpha{0.2};             ///< EWMA smoothing factor (EWMA path only)
 
-    // Serving cell tracking for RSRP delta bonus
-    double m_previousServingRsrp{0.0};               ///< Last known serving cell RSRP (dBm)
+    // --- Goodput tracking ---
+    uint64_t m_sinkBytesReceived{0};     ///< Bytes received this step
+
+    // --- Handover hangover ---
+    uint32_t m_handoverHangoverLength{4}; ///< Steps I_ho stays true after a handover
+    uint32_t m_handoverHangoverSteps{0};  ///< Remaining hangover steps
+
+    // --- Ping-pong detection ---
+    double m_pingPongBetaMultiplier{5.0}; ///< Multiply beta_H by this on ping-pong (attribute default 5.0)
+    uint32_t m_handoverHistory[3]{};      ///< Last 3 handover target cell IDs
+
+    // --- Handover-rate penalty (windowed signaling budget) ---
+    // On each handover event, count handovers within the last
+    // m_rateWindowMs; if the count exceeds m_rateBudget, multiply that step's
+    // reward by max(1 - lambda*excess, floor). The threshold structure taxes
+    // sustained churn (the attractor) while leaving sparse handovers free.
+    bool m_ratePenaltyEnabled{false}; ///< Enable the windowed rate penalty
+    uint32_t m_rateWindowMs{10000};   ///< Sliding window for the rate count (ms)
+    uint32_t m_rateBudget{2};         ///< Free handovers per window before penalizing
+    double m_ratePenaltyLambda{0.2};  ///< Marginal penalty per excess handover
+    bool m_handoverThisStep{false};   ///< A handover fired in the current step
+    std::deque<double> m_handoverTimes; ///< Handover timestamps in the sliding window (s)
+
+    // --- Timing ---
+    Time m_calculationInterval{MilliSeconds(200)}; ///< Reward step interval
+
+    // --- TBS tracking (logging only) ---
+    std::vector<int32_t> m_tbsHistory;   ///< TBS samples accumulated over step
+
+    // --- Node IDs ---
+    uint32_t m_uavNodeId{0};             ///< Node ID of the UAV
 };
 
 } // namespace ns3

@@ -1,10 +1,8 @@
 #include "nr-rl-handover-agent-app.h"
 
 #include "ns3/base-test.h"
-#include "ns3/lte-helper.h"
 
 #include <cstdint>
-#include <limits>
 #include <vector>
 
 namespace ns3
@@ -31,10 +29,15 @@ NrRlHandoverAgentApp::GetTypeId()
             .SetGroupName("defiance")
             .AddConstructor<NrRlHandoverAgentApp>()
             .AddAttribute("NumBs",
-                          "Number of base stations in the simulation.",
-                          UintegerValue(2),
+                          "Number of base stations/cells in the simulation.",
+                          UintegerValue(9),
                           MakeUintegerAccessor(&NrRlHandoverAgentApp::m_numBs),
-                          MakeUintegerChecker<uint32_t>());
+                          MakeUintegerChecker<uint32_t>())
+            .AddAttribute("TopN",
+                          "Number of ranked cells for Top-N action space.",
+                          UintegerValue(5),
+                          MakeUintegerAccessor(&NrRlHandoverAgentApp::m_topN),
+                          MakeUintegerChecker<uint32_t>(1, 10));
     return tid;
 }
 
@@ -44,23 +47,20 @@ NrRlHandoverAgentApp::Setup()
     AgentApplication::Setup();
     m_observation = GetResetObservation();
     m_reward = GetResetReward();
-    m_lastInferredActionTime = Seconds(0);
-    NS_LOG_INFO("NrRlHandoverAgentApp setup complete");
+    NS_LOG_INFO("NrRlHandoverAgentApp setup complete, numBs=" << m_numBs << " topN=" << m_topN);
 }
 
 void
 NrRlHandoverAgentApp::OnRecvObs(uint id)
 {
     NS_LOG_FUNCTION(this << id);
-    m_observation = m_obsDataStruct.GetNewestByID(id)->data;
+    auto data = m_obsDataStruct.GetNewestByID(id)->data;
 
-    // Observations already contain all metrics (rsrp, cwnd, bbr, etc.)
-    // from the observation app — no need to augment here.
+    // Data is a Dict wrapping flat Box ("obs" key). Store directly.
+    m_observation = data;
 
-    // Inference is throttled by measurement report frequency (~120-480ms).
     NS_LOG_INFO("Inferring handover action at t=" << Simulator::Now().GetSeconds() << "s");
     InferAction();
-    m_lastInferredActionTime = Simulator::Now();
 }
 
 void
@@ -79,123 +79,87 @@ NrRlHandoverAgentApp::InitiateAction(Ptr<OpenGymDataContainer> action)
 {
     NS_LOG_FUNCTION(this << action);
 
-    // Package discrete action as dict for the action app
+    // action is a DiscreteContainer (0..m_topN): 0 = no-op, 1..m_topN = handover
     auto dictAction = CreateObject<OpenGymDictContainer>();
-    dictAction->Add("newCellId", action);
+    dictAction->Add("actionIndex", action);
     SendAction(dictAction);
 }
 
 Ptr<OpenGymSpace>
 NrRlHandoverAgentApp::GetObservationSpace()
 {
+    // Dict wrapping 28-dim Box (key "obs") to match Send() data format
     auto dictSpace = CreateObject<OpenGymDictSpace>();
 
-    // --- Per-cell measurements ---
-    // RSRP per BS in dBm (-140 = unknown, typical range [-44, -140], but real values can go lower)
-    auto rsrpSpace = CreateObject<OpenGymBoxSpace>(-160.0,
-                                                    -40.0,
-                                                    std::vector<uint32_t>{m_numBs},
-                                                    TypeNameGet<double>());
-    // RSRQ per BS in dB (-20 = unknown, typical range [-3, -20], but real values can go much lower)
-    auto rsrqSpace = CreateObject<OpenGymBoxSpace>(-100.0,
-                                                    -3.0,
-                                                    std::vector<uint32_t>{m_numBs},
-                                                    TypeNameGet<double>());
+    // serving_rsrp, serving_rsrq, slot_rsrp[0..4], rsrp_delta[0..4],
+    // d_serving_rsrp, d_serving_sinr, d_serving_rsrq, d_norm_goodput,
+    // d_margin, d_slot_rsrp[0..4], sinr, heading_x, heading_y, heading_z,
+    // tbs, time_since_ho, norm_goodput, ho_count_10s   (30 dims, see NR-RL-DESIGN.md §3)
+    std::vector<float> low = {-160.0f, -100.0f,
+                              -160.0f, -160.0f, -160.0f, -160.0f, -160.0f,
+                              -60.0f, -60.0f, -60.0f, -60.0f, -60.0f,
+                              -20.0f, -20.0f, -20.0f, -2.0f, -20.0f,
+                              -20.0f, -20.0f, -20.0f, -20.0f, -20.0f,
+                              -40.0f, -1.0f, -1.0f, -1.0f,
+                              0.0f, 0.0f, 0.0f, 0.0f};
+    std::vector<float> high = {-40.0f, -3.0f,
+                               -40.0f, -40.0f, -40.0f, -40.0f, -40.0f,
+                               60.0f, 60.0f, 60.0f, 60.0f, 60.0f,
+                               20.0f, 20.0f, 20.0f, 2.0f, 20.0f,
+                               20.0f, 20.0f, 20.0f, 20.0f, 20.0f,
+                               50.0f, 1.0f, 1.0f, 1.0f,
+                               100000.0f, 10.0f, 2.0f, 10.0f};
 
-    // // --- PHY metrics ---
-    // auto tbsSpace = CreateObject<OpenGymBoxSpace>(0,
-    //                                                100000,
-    //                                                std::vector<uint32_t>{1},
-    //                                                TypeNameGet<int32_t>());
-
-    // --- Current cell UL SINR (scalar, only meaningful for serving cell) ---
-    auto sinrSpace = CreateObject<OpenGymBoxSpace>(-40,
-                                                    50,
-                                                    std::vector<uint32_t>{1},
-                                                    TypeNameGet<double>());
-
-    // --- Deltas (change since last observation) ---
-    auto rsrpDeltaSpace = CreateObject<OpenGymBoxSpace>(-60.0,
-                                                         60.0,
-                                                         std::vector<uint32_t>{m_numBs},
-                                                         TypeNameGet<double>());
-    auto rsrqDeltaSpace = CreateObject<OpenGymBoxSpace>(-60.0,
-                                                         60.0,
-                                                         std::vector<uint32_t>{m_numBs},
-                                                         TypeNameGet<double>());
-    auto sinrDeltaSpace = CreateObject<OpenGymBoxSpace>(-20,
-                                                         20,
-                                                         std::vector<uint32_t>{1},
-                                                         TypeNameGet<double>());
-
-    // --- Add all to dict ---
-    dictSpace->Add("rsrps", rsrpSpace);
-    dictSpace->Add("rsrqs", rsrqSpace);
-    dictSpace->Add("sinr", sinrSpace);
-    dictSpace->Add("rsrpDelta", rsrpDeltaSpace);
-    dictSpace->Add("rsrqDelta", rsrqDeltaSpace);
-    dictSpace->Add("sinrDelta", sinrDeltaSpace);
-    // dictSpace->Add("tbs", tbsSpace);
-
-    // --- Action mask (0/1 per action: 0=no-op, 1..numBs=target cell) ---
-    auto actionMaskSpace = CreateObject<OpenGymBoxSpace>(
-        0.0,
-        1.0,
-        std::vector<uint32_t>{m_numBs + 1},
-        TypeNameGet<double>());
-    dictSpace->Add("action_mask", actionMaskSpace);
-
+    std::vector<uint32_t> shape = {30};
+    auto boxSpace = CreateObject<OpenGymBoxSpace>(low, high, shape, TypeNameGet<double>());
+    dictSpace->Add("obs", boxSpace);
     return dictSpace;
 }
 
 Ptr<OpenGymSpace>
 NrRlHandoverAgentApp::GetActionSpace()
 {
-    // Discrete action: 0 = no-op, 1..numBs = target cell ID
-    return CreateObject<OpenGymDiscreteSpace>(m_numBs + 1);
+    // Top-N action space: 0 = no-op, 1..m_topN = handover to ranked cell
+    return CreateObject<OpenGymDiscreteSpace>(m_topN + 1);
 }
 
 Ptr<OpenGymDictContainer>
 NrRlHandoverAgentApp::GetResetObservation() const
 {
+    // 30-dim sentinel vector wrapped in Dict("obs")
+    auto box = MakeBoxContainer<double>(30);
+    // serving_rsrp, serving_rsrq
+    box->AddValue(-140.0);
+    box->AddValue(-20.0);
+    // slot_rsrp[0..4]
+    for (uint32_t i = 0; i < 5; i++)
+    {
+        box->AddValue(-140.0); // slot_rsrp
+    }
+    // rsrp_delta[0..4]
+    for (uint32_t i = 0; i < 5; i++)
+    {
+        box->AddValue(0.0); // rsrp_delta
+    }
+    // time-delta block: d_serving_rsrp, d_serving_sinr, d_serving_rsrq,
+    // d_norm_goodput, d_margin, d_slot_rsrp[0..4]
+    for (uint32_t i = 0; i < 10; i++)
+    {
+        box->AddValue(0.0);
+    }
+    // sinr, heading_x, heading_y, heading_z, tbs, time_since_ho, norm_goodput
+    box->AddValue(-40.0);
+    box->AddValue(0.0);
+    box->AddValue(0.0);
+    box->AddValue(0.0);
+    box->AddValue(0.0);
+    box->AddValue(10.0);
+    box->AddValue(0.0);
+    // ho_count_10s
+    box->AddValue(0.0);
+
     auto obs = CreateObject<OpenGymDictContainer>();
-
-    // Zero-initialized per-cell measurements
-    auto rsrps = MakeBoxContainer<double>(m_numBs);
-    auto rsrqs = MakeBoxContainer<double>(m_numBs);
-    for (uint32_t i = 0; i < m_numBs; i++)
-    {
-        rsrps->AddValue(-140.0);   // -140 = not measured (dBm)
-        rsrqs->AddValue(-20.0);    // -20 = not measured (dB)
-    }
-
-    // Current cell UL SINR (scalar)
-    auto sinr = MakeBoxContainer<double>(1, -40.0);
-
-    auto rrcState = CreateObject<OpenGymDiscreteContainer>();
-    rrcState->SetValue(0);
-
-    // PHY metrics
-    auto tbs = MakeBoxContainer<int32_t>(1, 0);
-
-    // Deltas (zero-initialized, reset resets history)
-    auto rsrpDelta = MakeBoxContainer<double>(m_numBs);
-    auto rsrqDelta = MakeBoxContainer<double>(m_numBs);
-    for (uint32_t i = 0; i < m_numBs; i++)
-    {
-        rsrpDelta->AddValue(0.0);
-        rsrqDelta->AddValue(0.0);
-    }
-    auto sinrDelta = MakeBoxContainer<double>(1, 0.0);
-
-    obs->Add("rsrps", rsrps);
-    obs->Add("rsrqs", rsrqs);
-    obs->Add("sinr", sinr);
-    obs->Add("rsrpDelta", rsrpDelta);
-    obs->Add("rsrqDelta", rsrqDelta);
-    obs->Add("sinrDelta", sinrDelta);
-    // obs->Add("tbs", tbs);
-
+    obs->Add("obs", box);
     return obs;
 }
 
@@ -203,6 +167,18 @@ float
 NrRlHandoverAgentApp::GetResetReward()
 {
     return 0.0f;
+}
+
+std::map<std::string, std::string>
+NrRlHandoverAgentApp::GetExtraInfo()
+{
+    auto info = AgentApplication::GetExtraInfo();
+    // The act-app set this during the previous action processing; with the
+    // agent-app's NotifyCurrentState it ships to Python (info channel) so the
+    // replay can store the executed action (0 = stay) instead of the intent.
+    extern int g_effectiveAction;
+    info["effective_action"] = std::to_string(g_effectiveAction);
+    return info;
 }
 
 } // namespace ns3

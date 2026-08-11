@@ -7,6 +7,7 @@ import matplotlib.gridspec as gridspec
 import pandas as pd
 import os
 import numpy as np
+import argparse
 
 
 def bin_data_mbps(df, bin_width=0.2):
@@ -39,6 +40,38 @@ def bin_count(df, bin_width=0.2):
 
     counts, _ = np.histogram(df["time"], bins=bins)
     return bin_centers, counts
+
+
+def _uav_rnti_mask(df, ue_meas):
+    """Mask scheduling rows that belong to the UAV, tracking RNTI changes.
+
+    The UAV's C-RNTI is reallocated by the target gNB at every handover, so a
+    fixed `rnti == 1` filter silently drops the UAV's scheduling after the
+    first handover — and can even pick up an interferer's entries, because
+    RNTI allocation restarts at 1 per cell. ue_meas_report.csv is the UAV's
+    own PHY measurement report and carries its current RNTI at every report,
+    so it provides the exact time -> RNTI mapping.
+
+    Args:
+        df: scheduling DataFrame with "time" and "rnti" columns.
+        ue_meas: the raw ue_meas_report.csv DataFrame (time, cellId, rnti,
+            rsrp, rsrq, isServingCell), or None.
+
+    Returns:
+        Boolean Series/ndarray over df's rows: True where the row is the UAV.
+    """
+    if ue_meas is None or ue_meas.empty:
+        print("[warn] ue_meas_report.csv missing/unreadable — falling back to "
+              "rnti==1 (wrong after the first handover); enable logging=true "
+              "for correct per-UAV plots")
+        return df["rnti"] == 1
+    tl = ue_meas[["time", "rnti"]].drop_duplicates(subset="time", keep="last")
+    tl = tl.sort_values("time")
+    times = tl["time"].to_numpy()
+    rntis = tl["rnti"].to_numpy()
+    idx = np.searchsorted(times, df["time"].to_numpy(), side="right") - 1
+    idx = np.clip(idx, 0, len(tl) - 1)
+    return df["rnti"].to_numpy() == rntis[idx]
 
 
 def _insert_nan_at_gaps(t, y, max_gap):
@@ -75,25 +108,49 @@ def cumulative_bytes(df):
     return df["time"].values, cum.values
 
 
+# Argument parsing
+parser = argparse.ArgumentParser(
+    description="Plot NR-RL handover statistics from CSV logs.")
+parser.add_argument("-o", "--output", type=str, default="nr-rl-stats.png",
+                    help="Output PNG file name for the plot.")
+parser.add_argument("-i", "--input_dir", type=str, default=None,
+                    help="Directory containing the CSV log files. Defaults to 'output' in the script directory. Relative to script directory if not absolute.")
+args = parser.parse_args()
+
+
 def main(argv=None):
-    outfile = "nr-rl-stats.png"
-    # If available from argv, set the output file name
-    if len(argv) > 1:
-        out_file = argv[1]
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    data_dir = script_dir + '/output'
+
+    if args.output:
+        out_file = args.output
+        # If available from argv, set the output file name
         if out_file.endswith(".png"):
             outfile = out_file
         else:
             outfile = out_file + ".png"
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    data_dir = script_dir + '/output'
+    if args.input_dir:
+        data_dir = args.input_dir
+        if data_dir.startswith("./") or data_dir.startswith("../"):
+            data_dir = os.path.abspath(os.path.join(script_dir, data_dir))
+        else:
+            data_dir = os.path.abspath(data_dir)
+        if not os.path.exists(data_dir):
+            print(
+                f"Input directory does not exist, creating directory: {data_dir}")
+            os.makedirs(data_dir, exist_ok=True)
+            print(f"Using input directory: {data_dir}")
+
+    HARQ_FILE = data_dir + '/nr-rl-harq.csv'
+    SLOT_STATS_FILE = data_dir + '/nr-rl-slot-stats.csv'
     CWND_FILE = data_dir + '/nr-rl-cwnd.csv'
     HO_FILE = data_dir + '/nr-rl-handovers.csv'
     RTT_FILE = data_dir + '/nr-rl-rtt.csv'
     PACING_FILE = data_dir + '/nr-rl-pacing-gain.csv'
     CWND_GAIN_FILE = data_dir + '/nr-rl-cwnd-gain.csv'
     DELIVERY_RATE_FILE = data_dir + '/nr-rl-rate.csv'
-    UL_SINR_FILE = data_dir + '/ul_sinr.csv'
-    MSC_FILE = data_dir + '/mcs.csv'
+    DL_SINR_FILE = data_dir + '/dl_sinr.csv'
+    UL_SINR_SRS_FILE = data_dir + '/ul_sinr_srs.csv'
     RETRANS_FILE = data_dir + '/retransmissions.csv'
     SINK_FILE = data_dir + '/sink-packets.csv'
     SOURCE_FILE = data_dir + '/source-packets.csv'
@@ -104,8 +161,16 @@ def main(argv=None):
 
     if not os.path.exists(CWND_FILE):
         print(f"CWND data file not found: {CWND_FILE}")
-        print("Run 'ns3 run defiance-nr-rl-handover' first to generate it.")
-        exit(1)
+        print("Some TCP-specific plots will be empty (expected for UDP runs).")
+
+    harq = pd.read_csv(HARQ_FILE, header=None,
+                       names=["time", "cellId", "rnti", "bwpId", "harqId", "k1Delay"]) \
+        if os.path.exists(HARQ_FILE) else None
+
+    slot_stats = pd.read_csv(SLOT_STATS_FILE, header=None,
+                             names=["time", "cellId", "scheduledUe", "usedReg",
+                                    "usedSym", "availableRb", "availableSym", "utilPct"]) \
+        if os.path.exists(SLOT_STATS_FILE) else None
 
     cwnd = pd.read_csv(CWND_FILE, header=None, names=["time", "cwnd"])
     # Multiple CWND updates can happen at the same timestamp (burst of ACKs).
@@ -139,39 +204,32 @@ def main(argv=None):
         subset="time", keep="last").sort_values("time")
 
     rsrp_rsrq_full = pd.read_csv(RSRP_RSRQ_200ms, header=None,
-                                names=["time", "cellId", "rnti", "rsrp", "rsrq", "isServingCell"]) \
+                                 names=["time", "cellId", "rnti", "rsrp", "rsrq", "isServingCell"]) \
         if os.path.exists(RSRP_RSRQ_200ms) else None
     rsrp_rsrq = rsrp_rsrq_full[rsrp_rsrq_full["isServingCell"] == 1].copy() \
         if rsrp_rsrq_full is not None and not rsrp_rsrq_full.empty else None
 
-    ul_sinr = pd.read_csv(UL_SINR_FILE, header=None, names=["time", "cellId", "rnti", "sinr"]) \
-        if os.path.exists(UL_SINR_FILE) else None
+    ul_sinr_srs = pd.read_csv(UL_SINR_SRS_FILE, header=None, names=["time", "cellId", "sinr"]) \
+        if os.path.exists(UL_SINR_SRS_FILE) else None
+
+    # ── UL scheduling data (MCS, TBS per slot) ──
+    UL_SCHED_FILE = data_dir + '/nr-rl-ul-sched.csv'
+    ul_sched = pd.read_csv(UL_SCHED_FILE, header=None,
+                           names=["time", "cellId", "rnti", "mcs", "tbSize", "symStart", "numSym"]) \
+        if os.path.exists(UL_SCHED_FILE) else None
+
+    dl_sinr = pd.read_csv(DL_SINR_FILE, header=None, names=["time", "cellId", "rnti", "sinr"]) \
+        if os.path.exists(DL_SINR_FILE) else None
 
     tx_power = pd.read_csv(TX_POWER_FILE, header=None,
                            names=["time", "cellId", "rnti", "txPowerDbm"]) \
         if os.path.exists(TX_POWER_FILE) else None
 
-    # Parse MCS file — supports both LTE (3 cols: time, mcs, tbs) and NR (2 cols: time, tbSize)
-    if os.path.exists(MSC_FILE):
-        mcs_raw = pd.read_csv(MSC_FILE, header=None)
-        n_cols = mcs_raw.shape[1]
-        if n_cols == 3:
-            # LTE format: time, mcs, tbs
-            mcs = mcs_raw.copy()
-            mcs.columns = ["time", "mcs", "tbs"]
-        else:
-            # NR format: time, tbSize (MCS not logged, compute rate directly from TBS)
-            mcs = mcs_raw.copy()
-            mcs.columns = ["time", "tbs"]
-            mcs["mcs"] = 0  # placeholder
-    else:
-        mcs = None
-
-    TTI = 0.001  # 1 ms in seconds (1 slot at numerology 0 ~ 15kHz SCS, numerology 1 ~ 30 kHz SCS (0.5ms))
-    if mcs is not None and not mcs.empty:
-        # Instantaneous PHY rate per slot (1ms): TBS (bytes) * 8 / 1ms / 1e6 = Mbps
-        # This is noisy per-slot; use rolling average for the plot.
-        pass
+    # ── DL scheduling data (replaces mcs.csv) ──
+    DL_SCHED_FILE = data_dir + '/nr-rl-dl-sched.csv'
+    dl_sched = pd.read_csv(DL_SCHED_FILE, header=None,
+                           names=["time", "cellId", "rnti", "mcs", "tbSize", "symStart", "numSym"]) \
+        if os.path.exists(DL_SCHED_FILE) else None
 
     # ── New data: rl_reward (EWMA reward components) ──
     rsrp_sinr = pd.read_csv(RSRP_SINR_FILE, header=None, names=["time", "cellId", "rnti", "rsrp", "sinrDb"]) \
@@ -190,7 +248,7 @@ def main(argv=None):
     source = pd.read_csv(SOURCE_FILE, header=None, names=["time", "size"]) \
         if os.path.exists(SOURCE_FILE) else None
 
-    # ── 6x2 layout ──────────────────────────────────────────────────────
+    # ── 6x2 layout (was 7x2, removed per-cell RB utilization) ──────────
     fig = plt.figure(figsize=(12, 17))
     gs = gridspec.GridSpec(6, 2, figure=fig)
     ax1 = fig.add_subplot(gs[0, 0])
@@ -211,39 +269,57 @@ def main(argv=None):
     for ax in [ax2, ax3, ax4, ax5, ax6, ax7, ax8, ax9, ax10]:
         ax.sharex(ax1)
 
-    all_times = [cwnd["time"].max()]
-    if rtt is not None:
+    all_times = []
+    if cwnd is not None and not cwnd.empty:
+        all_times.append(cwnd["time"].max())
+    if rtt is not None and not rtt.empty:
         all_times.append(rtt["time"].max())
-    if pacing_gain is not None:
+    if pacing_gain is not None and not pacing_gain.empty:
         all_times.append(pacing_gain["time"].max())
-    if delivery_rate is not None:
+    if delivery_rate is not None and not delivery_rate.empty:
         all_times.append(delivery_rate["time"].max())
-    if rsrp_rsrq is not None:
+    if rsrp_rsrq is not None and not rsrp_rsrq.empty:
         all_times.append(rsrp_rsrq["time"].max())
-    if ul_sinr is not None:
-        all_times.append(ul_sinr["time"].max())
-    if source is not None:
+    if ul_sinr_srs is not None and not ul_sinr_srs.empty:
+        all_times.append(ul_sinr_srs["time"].max())
+    if ul_sched is not None and not ul_sched.empty:
+        all_times.append(ul_sched["time"].max())
+    if dl_sinr is not None and not dl_sinr.empty:
+        all_times.append(dl_sinr["time"].max())
+    if source is not None and not source.empty:
         all_times.append(source["time"].max())
-    if rl_reward is not None:
+    if rl_reward is not None and not rl_reward.empty:
         all_times.append(rl_reward["time"].max())
 
+    # Fallback if no time-series data available
+    if not all_times:
+        all_times = [0.0]
+
     max_time = max(all_times)
+
+    # Start all axes at 1s (skip the pre-TCP setup phase)
+    ax1.set_xlim(0, max_time * 1.05)
 
     # ═══════════════════════════════════════════════════════════════════
     # (1,1) Congestion Window
     # ═══════════════════════════════════════════════════════════════════
-    ax1.step(cwnd["time"], cwnd["cwnd"] / 1024.0,
-             linewidth=1.0, color="tab:brown")
-    ax1.set_ylabel("Congestion Window (KB)")
-    ax1.set_title("TCP Congestion Window over Time")
-    ax1.grid(True)
+    if cwnd is not None and not cwnd.empty:
+        # Break line at gaps > 200ms (CWND updates per ACK, ~6ms interval)
+        t_cwnd, y_cwnd = _insert_nan_at_gaps(
+            cwnd["time"].values, cwnd["cwnd"].values, 0.2)
+        ax1.step(t_cwnd, y_cwnd / 1024.0, linewidth=1.0,
+                 color="tab:brown", where="post")
+        ax1.set_ylabel("Congestion Window (KB)")
+        ax1.set_title("TCP Congestion Window over Time")
+        ax1.grid(True)
 
     # ═══════════════════════════════════════════════════════════════════
     # (1,2) RTT
     # ═══════════════════════════════════════════════════════════════════
     if rtt is not None and not rtt.empty:
         # Break line at gaps > 200ms (RTT updates per ACK, ~6ms interval)
-        t_rtt, y_rtt = _insert_nan_at_gaps(rtt["time"].values, rtt["rtt"].values, 0.2)
+        t_rtt, y_rtt = _insert_nan_at_gaps(
+            rtt["time"].values, rtt["rtt"].values, 0.2)
         ax2.step(t_rtt, y_rtt, linewidth=1.0, color="tab:blue", where="post")
         ax2.set_ylabel("Round Trip Time (ms)")
         ax2.set_title("TCP Round Trip Time over Time")
@@ -253,53 +329,101 @@ def main(argv=None):
                     alpha=0.6, linewidth=0.8, label="PGW-Server RTT")
 
     # ═══════════════════════════════════════════════════════════════════
-    # (2,1) Pacing Gain
+    # (2,1) DL/UL SINR — serving cell only for clarity
     # ═══════════════════════════════════════════════════════════════════
-    if pacing_gain is not None and not pacing_gain.empty:
-        ax3.step(pacing_gain["time"], pacing_gain["pacing_gain"],
-                 linewidth=1.0, color="tab:purple", where="post")
-        ax3.set_ylabel("Pacing Gain")
-        ax3.set_ylim(0, 2.5)
-        ax3.axhline(y=1.0, color="gray", linestyle=":",
-                    alpha=0.4, linewidth=0.5)
-        ax3.grid(True)
+    ax3.set_ylabel("SINR (dB)")
+    ax3.set_title("DL and UL SINR over Time (serving cell)")
+    ax3.grid(True)
+    if dl_sinr is not None and not dl_sinr.empty:
+        # DlDataSinr trace only fires for the serving cell (UE PHY), so
+        # dl_sinr.csv already contains serving-cell SINR. Plot as-is.
+        dl_plot = dl_sinr
+        if not dl_plot.empty:
+            dl_sinr_smooth = dl_plot["sinr"].rolling(
+                window=100, center=True, min_periods=1).median()
+            ax3.plot(dl_plot["time"], dl_sinr_smooth, linewidth=0.8,
+                     color="tab:green", linestyle="-", alpha=0.7, label="DL SINR (data)")
+    if ul_sinr_srs is not None and not ul_sinr_srs.empty:
+        # The UlSrsSinrLogger already filters by g_currentCellId in C++, so
+        # all rows are already serving-cell SINR.  No merge needed.
+        ul_srs_smooth = ul_sinr_srs["sinr"].rolling(
+            window=400, center=True, min_periods=1).mean()
+        ax3.plot(ul_sinr_srs["time"], ul_srs_smooth, linewidth=0.8,
+                 color="tab:cyan", linestyle="--", alpha=0.7, label="UL SINR (SRS)")
+    ax3.legend(fontsize=6, loc="upper right")
 
     # ═══════════════════════════════════════════════════════════════════
-    # (2,2) Delivery Rate + Theoretical Max Rate
+    # (2,2) Delivery Rate + UL MCS + PHY Throughput
     # ═══════════════════════════════════════════════════════════════════
+    ax4b = ax4.twinx()
     if delivery_rate is not None and not delivery_rate.empty:
-        # Break line at gaps > 200ms (delivery rate updates per ACK, ~6ms interval)
         t_dr, y_dr = _insert_nan_at_gaps(delivery_rate["time"].values,
-                                          delivery_rate["rate"].values / 1e6, 0.2)
+                                         delivery_rate["rate"].values / 1e6, 0.2)
         ax4.step(t_dr, y_dr, linewidth=1.0, color="tab:red", where="post")
         ax4.set_ylabel("Delivery Rate (Mbps)")
-        ax4.set_title("Delivery Rate over Time")
+        ax4.set_title("Delivery Rate, UL MCS, and PHY Throughput")
         ax4.grid(True)
-    if mcs is not None and not mcs.empty:
-        # Per-slot TBS is noisy (fires every 1ms). Smooth with a 100ms rolling window.
-        mcs_smooth = mcs.copy()
-        mcs_smooth["rate_mbps"] = mcs_smooth["tbs"] * 8.0 / TTI / 1e6
-        mcs_smooth["rate_avg"] = mcs_smooth["rate_mbps"].rolling(window=100, min_periods=1).mean()
-        ax4.step(mcs_smooth["time"], mcs_smooth["rate_avg"], linewidth=0.8, color="tab:orange",
-                 label="PHY throughput (100ms avg, Mbps)", alpha=0.9)
-        ax4.legend(fontsize=8)
+    if dl_sched is not None and not dl_sched.empty:
+        # DL PHY throughput from scheduling, tracked to the UAV via its
+        # time-varying RNTI (C-RNTI changes at every handover).
+        uav_mask = _uav_rnti_mask(dl_sched, rsrp_rsrq_full)
+        dl_tbs_main = dl_sched[uav_mask].copy()
+        if not dl_tbs_main.empty:
+            dl_tbs_main["rate_mbps"] = dl_tbs_main["tbSize"] * 8.0 / 1e-3 / 1e6
+            dl_tbs_main["rate_avg"] = dl_tbs_main["rate_mbps"].rolling(
+                window=100, min_periods=1).mean()
+            ax4.step(dl_tbs_main["time"], dl_tbs_main["rate_avg"], linewidth=0.8, color="tab:orange",
+                     label="DL PHY rate (100slots avg Mbps)", alpha=0.9)
+    if ul_sched is not None and not ul_sched.empty:
+        # Filter to the UAV (RNTI changes on handover) and smooth UL MCS
+        uav_mask_ul = _uav_rnti_mask(ul_sched, rsrp_rsrq_full)
+        ul_mcs_main = ul_sched[uav_mask_ul].copy()
+        if not ul_mcs_main.empty:
+            ul_mcs_smooth = ul_mcs_main["mcs"].rolling(
+                window=100, min_periods=1).mean()
+            ax4b.step(ul_mcs_main["time"], ul_mcs_smooth, linewidth=1.0,
+                      color="tab:blue", where="post", label="UL MCS (100slots avg)")
+            ax4b.set_ylabel("UL MCS index")
+            ax4b.set_ylim(-1, 29)
+        # Also show UL PHY throughput (TBS-based)
+        ul_tbs_main = ul_sched[uav_mask_ul].copy()
+        if not ul_tbs_main.empty:
+            ul_tbs_main["rate_mbps"] = ul_tbs_main["tbSize"] * 8.0 / 1e-3 / 1e6
+            ul_tbs_main["rate_avg"] = ul_tbs_main["rate_mbps"].rolling(
+                window=100, min_periods=1).mean()
+            ax4.step(ul_tbs_main["time"], ul_tbs_main["rate_avg"], linewidth=0.8,
+                     color="tab:blue", linestyle=":", alpha=0.7, label="UL PHY rate (100ms avg Mbps)")
+    lines1, labels1 = ax4.get_legend_handles_labels()
+    lines2, labels2 = ax4b.get_legend_handles_labels()
+    ax4.legend(lines1 + lines2, labels1 + labels2,
+               fontsize=6, loc="upper left")
 
     # ═══════════════════════════════════════════════════════════════════
-    # (3,1) MCS Index + UE TX Power
+    # (3,1) HARQ Transmissions (binned) — replaces MCS + UE TX Power
     # ═══════════════════════════════════════════════════════════════════
-    if mcs is not None and not mcs.empty:
-        ax5.step(mcs["time"], mcs["mcs"], linewidth=1.0, color="tab:cyan",
-                 label="MCS")
-        ax5.set_ylabel("MCS Index")
-        ax5.set_title("MCS Index and UE TX Power over Time")
+    if harq is not None and not harq.empty:
+        # Bin HARQ entries per 200ms window, colored by cell ID
+        cell_ids_harq = sorted(harq["cellId"].unique())
+        colors_h = plt.cm.Set1(np.linspace(0, 1, len(cell_ids_harq)))
+        t_min = harq["time"].min()
+        t_max = harq["time"].max()
+        bin_width = 0.2
+        bins = np.arange(t_min, t_max + bin_width, bin_width)
+        bin_centers = (bins[:-1] + bins[1:]) / 2
+
+        bottom = np.zeros(len(bin_centers))
+        for idx, cid in enumerate(cell_ids_harq):
+            cid_data = harq[harq["cellId"] == cid]
+            counts, _ = np.histogram(cid_data["time"], bins=bins)
+            ax5.bar(bin_centers, counts, width=bin_width * 0.9,
+                    bottom=bottom, color=colors_h[idx], alpha=0.7,
+                    label=f"Cell {int(cid)}")
+            bottom += counts
+        ax5.set_ylabel("HARQ feedback count")
+        ax5.set_title("HARQ Transmissions (200ms bins, colored by cell)")
         ax5.grid(True)
-        ax5.set_ylim(0, 30)
-    if tx_power is not None and not tx_power.empty:
-        ax5b = ax5.twinx()
-        ax5b.plot(tx_power["time"], tx_power["txPowerDbm"], linewidth=0.8,
-                  color="tab:red", alpha=0.7, label="UE TX Power (dBm)")
-        ax5b.set_ylabel("UE TX Power (dBm)")
-        ax5b.legend(fontsize=6, loc="upper right")
+        ax5.set_yscale("symlog", linthresh=10)
+        ax5.legend(fontsize=6, loc="upper right")
 
     # ═══════════════════════════════════════════════════════════════════
     # (3,2) Throughput (source) + Goodput (sink) — binned rate + cumulative
@@ -343,31 +467,21 @@ def main(argv=None):
                fontsize=6, loc="upper left")
 
     # ═══════════════════════════════════════════════════════════════════
-    # (4,1) RSRP / RSRQ / SINR (200ms serving cell)
+    # (4,1) RSRP / RSRQ (200ms serving cell)
     # ═══════════════════════════════════════════════════════════════════
     if rsrp_rsrq is not None and not rsrp_rsrq.empty:
         ax7.plot(rsrp_rsrq["time"], rsrp_rsrq["rsrp"], linewidth=1.2,
                  color="tab:orange", label="RSRP 200ms serving")
         ax7.set_ylabel("RSRP (dBm)")
-        ax7.set_title("Serving Cell RSRP, RSRQ and SINR")
+        ax7.set_title("Serving Cell RSRP and RSRQ")
         ax7.grid(True)
         ax7.legend(fontsize=6, loc="upper left")
-        # twinx for RSRQ + SINR
+        # twinx for RSRQ
         ax7b = ax7.twinx()
         ax7b.plot(rsrp_rsrq["time"], rsrp_rsrq["rsrq"], linewidth=0.8,
                   color="tab:purple", linestyle=":", alpha=0.7,
                   label="RSRQ 200ms serving")
-        if ul_sinr is not None and not ul_sinr.empty:
-            # UL SINR fires every ~0.6ms (dense). Smooth with rolling window.
-            ul_sinr_smooth = ul_sinr["sinr"].rolling(window=100, center=True, min_periods=1).median()
-            ax7b.plot(ul_sinr["time"], ul_sinr_smooth, linewidth=0.8,
-                      color="tab:blue", linestyle="-.", alpha=0.7, label="UL SINR serving")
-        if rsrp_sinr is not None and not rsrp_sinr.empty:
-            # Apply median moving average filter (window=10 ~ 10ms at 1ms SRS)
-            dl_sinr_smooth = rsrp_sinr["sinrDb"].rolling(window=10, center=True, min_periods=1).median()
-            ax7b.plot(rsrp_sinr["time"], dl_sinr_smooth, linewidth=0.8,
-                      color="tab:green", linestyle=":", alpha=0.7, label="DL SINR (serving)")
-        ax7b.set_ylabel("RSRQ / SINR (dB)")
+        ax7b.set_ylabel("RSRQ (dB)")
         ax7b.legend(fontsize=6, loc="upper right")
 
     # ═══════════════════════════════════════════════════════════════════
@@ -401,7 +515,8 @@ def main(argv=None):
                   linestyle="--", alpha=0.6, label="TBS bonus")
         ax8b.plot(t, rl_reward["reward"], linewidth=1.2, color="tab:red",
                   label="Reward (total)")
-        ax8b.axhline(y=0, color="gray", linestyle=":", alpha=0.3, linewidth=0.5)
+        ax8b.axhline(y=0, color="gray", linestyle=":",
+                     alpha=0.3, linewidth=0.5)
         ax8b.set_ylabel("Normalized reward components")
 
         # Combined legend
@@ -410,14 +525,24 @@ def main(argv=None):
         ax8.legend(lines1 + lines2, labels1 + labels2,
                    fontsize=5, loc="upper left")
     else:
-        # Fallback: retransmissions if no reward data
-        if retrans is not None and not retrans.empty:
-            t_ret, cnt = bin_count(retrans)
-            ax8.bar(t_ret, cnt, width=0.18, color="tab:red", alpha=0.7,
-                    edgecolor="tab:red", linewidth=0.3)
-            ax8.set_ylabel("Retransmissions (count)")
-        ax8.set_title("Retransmissions (200 ms bins)")
-        ax8.grid(True)
+        # Serving cell utilization with 200ms rolling average for readability
+        ss_sorted = slot_stats.sort_values("time")
+        ss_sorted["util_smooth"] = ss_sorted["utilPct"].rolling(
+            window=200, min_periods=1, center=True).mean()
+        ax8.step(ss_sorted["time"], ss_sorted["util_smooth"], linewidth=0.8,
+                 color="tab:red", alpha=0.8, where="post", label="RB util (%)")
+        if slot_stats["scheduledUe"].max() > 1:
+            busy = slot_stats[slot_stats["scheduledUe"] > 1]
+            ax8.plot(busy["time"], [100]*len(busy), "v", color="darkred",
+                     markersize=3, alpha=0.5, label=f">1 UE ({len(busy)} slots)")
+            ax8.set_ylabel("Utilization (%)")
+            ax8.set_title("Serving Cell RB Utilization (per slot)")
+            ax8.set_ylim(-5, 105)
+            ax8.grid(True)
+            ax8.legend(fontsize=6, loc="upper right")
+        else:
+            ax8.set_title("Serving Cell RB Utilization")
+            ax8.grid(True)
     # if rsrp_sinr is not None and not rsrp_sinr.empty:
     #     ax8.plot(rsrp_sinr["time"], rsrp_sinr["rsrp"], linewidth=0.8, color="tab:orange")
     #     ax8.set_ylabel("RSRP (dBm)")
@@ -441,7 +566,8 @@ def main(argv=None):
                      label=f"Cell {int(cell_id)}")
         # Overlay serving cell RSRP with thicker lines, split at gaps to avoid
         # connecting non-contiguous serving periods (e.g. across handovers).
-        serving_data = rsrp_rsrq_full[rsrp_rsrq_full["isServingCell"] == 1].copy()
+        serving_data = rsrp_rsrq_full[rsrp_rsrq_full["isServingCell"] == 1].copy(
+        )
         if not serving_data.empty:
             for idx, cell_id in enumerate(cell_ids):
                 seg = serving_data[serving_data["cellId"] == cell_id]
@@ -480,7 +606,8 @@ def main(argv=None):
                       color=colors[idx], alpha=0.5,
                       label=f"Cell {int(cell_id)}")
         # Overlay serving cell RSRQ with thicker lines, split at gaps
-        serving_data = rsrp_rsrq_full[rsrp_rsrq_full["isServingCell"] == 1].copy()
+        serving_data = rsrp_rsrq_full[rsrp_rsrq_full["isServingCell"] == 1].copy(
+        )
         if not serving_data.empty:
             for idx, cell_id in enumerate(cell_ids):
                 seg = serving_data[serving_data["cellId"] == cell_id]
@@ -514,7 +641,7 @@ def main(argv=None):
                            alpha=0.5, linewidth=0.7)
 
     plt.tight_layout()
-    out_path = script_dir + "/output/" + outfile
+    out_path = data_dir + "/" + outfile
     plt.savefig(out_path, dpi=300)
     print(f"Plot saved to {out_path}")
 

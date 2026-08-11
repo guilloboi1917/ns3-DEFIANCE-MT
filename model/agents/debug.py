@@ -22,7 +22,17 @@ def make_debug_env(
 def make_env(env_name: str, max_episode_steps: int, ns3_settings: dict[str, Any], **env_args: Any) -> Ns3MultiAgentEnv:
     """Make a configured ns3-ai gym env."""
     logger.info("max_episode_steps %s not supported for multi-agent!", max_episode_steps)
-    return Ns3MultiAgentEnv(targetName=env_name, ns3Path=NS3_HOME, ns3Settings=ns3_settings, **env_args)
+    # Pass trial_name through: the env defaults to "single_trial" and only
+    # syncs it into ns3Settings when given explicitly — otherwise the sim
+    # (which reads trial_name from its CLI) and the python side attach to
+    # different shm segments and the sim dies at startup.
+    return Ns3MultiAgentEnv(
+        targetName=env_name,
+        ns3Path=NS3_HOME,
+        ns3Settings=ns3_settings,
+        trial_name=ns3_settings.get("trial_name"),
+        **env_args,
+    )
 
 
 def start_random_agent(env: Ns3MultiAgentEnv, iterations: int) -> None:

@@ -9,14 +9,13 @@
 
 using namespace ns3;
 
-// External globals from the scenario (outside namespace ns3 to match definitions in
-// nr-rl-handover-scenario.cc)
+// External globals from the scenario
 extern NetDeviceContainer g_uavNrDevs;
 extern NetDeviceContainer g_gnbNrDevs;
 extern Ptr<NrHelper> g_nrHelper;
 extern uint32_t g_totalHandovers;
-extern bool g_tcpConnected;
 extern bool g_handoverInProgress;
+extern uint32_t g_topNCells[6];
 extern std::vector<double> g_lastRsrpValues;
 extern std::vector<double> g_lastRsrqValues;
 extern bool g_logging;
@@ -26,6 +25,12 @@ namespace ns3
 {
 
 NS_LOG_COMPONENT_DEFINE("NrRlHandoverActionApp");
+
+// Effective action of the most recent RL step: the action index the act-app
+// actually executed (0 = stay: noop OR blocked). Read by the agent-app's
+// GetExtraInfo() and shipped to Python via the existing info channel, so the
+// replay can store the EXECUTED action instead of the blocked intent.
+int g_effectiveAction = 0;
 
 NrRlHandoverActionApp::NrRlHandoverActionApp()
     : ActionApplication()
@@ -46,21 +51,26 @@ NrRlHandoverActionApp::GetTypeId()
             .AddConstructor<NrRlHandoverActionApp>()
             .AddAttribute("NumBs",
                           "Number of base stations in the simulation.",
-                          UintegerValue(2),
+                          UintegerValue(9),
                           MakeUintegerAccessor(&NrRlHandoverActionApp::m_numBs),
                           MakeUintegerChecker<uint32_t>())
+            .AddAttribute("TopN",
+                          "Number of ranked cells for Top-N action space.",
+                          UintegerValue(5),
+                          MakeUintegerAccessor(&NrRlHandoverActionApp::m_topN),
+                          MakeUintegerChecker<uint32_t>(1, 10))
             .AddAttribute("HandoverAlgorithm",
                           "Handover algorithm: agent, a3, or noop.",
                           StringValue("agent"),
                           MakeStringAccessor(&NrRlHandoverActionApp::m_handoverAlgorithm),
                           MakeStringChecker())
-            .AddAttribute("HandoverMargin",
-                          "RSRP margin (3GPP range, ~1 dB per step). "
-                          "Target must have RSRP > serving + margin. "
-                          "Set to -999 to disable gating.",
-                          DoubleValue(-5.0),
-                          MakeDoubleAccessor(&NrRlHandoverActionApp::m_handoverMargin),
-                          MakeDoubleChecker<double>());
+            .AddAttribute("HandoverDebounceMs",
+                          "Minimum interval between EXECUTED handovers (ms). "
+                          "0 = disabled. 3GPP TTT analog: caps the executed "
+                          "handover rate and guarantees calm periods.",
+                          UintegerValue(0),
+                          MakeUintegerAccessor(&NrRlHandoverActionApp::m_handoverDebounceMs),
+                          MakeUintegerChecker<uint32_t>());
     return tid;
 }
 
@@ -83,178 +93,239 @@ NrRlHandoverActionApp::ExecuteAction(uint32_t remoteAppId, Ptr<OpenGymDictContai
         return;
     }
 
-    // --- Precondition 1: Is a handover already in progress? ---
-    // Prevents dispatching a second HandoverRequest while the first is still
-    // being prepared (avoids NS_FATAL "method unexpected in state HANDOVER_PREPARATION").
+    // --- Extract action index (0..m_topN) ---
+    auto actionIndexContainer = DynamicCast<OpenGymDiscreteContainer>(action->Get("actionIndex"));
+    if (!actionIndexContainer)
+    {
+        NS_LOG_WARN("Action dict missing 'actionIndex', skipping.");
+        return;
+    }
+    uint32_t actionIndex = actionIndexContainer->GetValue();
+
+    // --- Map action index to target cellId via g_topNCells (0 for noop) ---
+    uint32_t targetCellId = g_topNCells[actionIndex];
+
+    // --- Current serving cell (safe lookup; 0 if not yet attached) ---
+    uint32_t currentCellId = 0;
+    if (g_uavNrDevs.GetN() > 0)
+    {
+        auto ueDev = g_uavNrDevs.Get(0)->GetObject<NrUeNetDevice>();
+        if (ueDev && ueDev->GetRrc())
+        {
+            currentCellId = ueDev->GetRrc()->GetCellId();
+        }
+    }
+
+    // --- Log every received action (incl. noop and blocked) ---
+    // Columns: time, actionIndex, targetCellId, currentCellId, outcome
+    auto logAction = [&](const std::string& outcome) {
+        if (g_logging)
+        {
+            std::ofstream actFile(g_outputDir + "rl_actions_full.csv", std::ios_base::app);
+            actFile << Simulator::Now().GetSeconds() << ","
+                    << actionIndex << ","
+                    << targetCellId << ","
+                    << currentCellId << ","
+                    << outcome << std::endl;
+        }
+    };
+
+    // --- Effective action: default to stay (noop or any block) ---
+    g_effectiveAction = 0;
+
+    // --- No-op? ---
+    if (actionIndex == 0)
+    {
+        logAction("noop");
+        NS_LOG_DEBUG("No-op (actionIndex=0), skipping handover.");
+        return;
+    }
+
+    // --- Validate action index bounds ---
+    if (actionIndex > m_topN)
+    {
+        logAction("invalid-action-index");
+        NS_LOG_WARN("Invalid actionIndex " << actionIndex << " (max=" << m_topN << "), skipping.");
+        return;
+    }
+
+    // --- Validate target cell ---
+    if (targetCellId == 0)
+    {
+        logAction("no-valid-cell");
+        NS_LOG_DEBUG("g_topNCells[" << actionIndex << "] = 0 (no valid cell), skipping.");
+        return;
+    }
+
+    if (targetCellId > m_numBs)
+    {
+        logAction("invalid-cell");
+        NS_LOG_WARN("Invalid target cell " << targetCellId << " (max=" << m_numBs << "), skipping.");
+        return;
+    }
+
+    // --- Precondition: Is a handover already in progress? ---
     if (g_handoverInProgress)
     {
+        logAction("blocked-in-progress");
         NS_LOG_DEBUG("Handover already in progress, deferring.");
         return;
     }
 
-    // --- Precondition 2: Does the UAV LTE device exist? ---
+    // --- Precondition: Does the UAV NR device exist? ---
     if (g_uavNrDevs.GetN() == 0)
     {
-        NS_LOG_WARN("No UAV LTE device, skipping handover.");
+        logAction("blocked-no-device");
+        NS_LOG_WARN("No UAV NR device, skipping handover.");
         return;
     }
 
     auto ueNrDev = g_uavNrDevs.Get(0)->GetObject<NrUeNetDevice>();
     if (!ueNrDev)
     {
-        NS_LOG_WARN("UAV LTE device is null, skipping handover.");
+        logAction("blocked-no-uedev");
+        NS_LOG_WARN("UAV NR device is null, skipping handover.");
         return;
     }
 
-    // --- Precondition 2: Is the UE in CONNECTED_NORMALLY state? ---
+    // --- Precondition: Is the UE in CONNECTED_NORMALLY state? ---
     auto ueRrc = ueNrDev->GetRrc();
     if (!ueRrc)
     {
+        logAction("blocked-no-rrc");
         NS_LOG_WARN("UAV RRC is null, skipping handover.");
         return;
     }
     if (ueRrc->GetState() != NrUeRrc::CONNECTED_NORMALLY)
     {
-        NS_LOG_DEBUG("UE not in CONNECTED_NORMALLY state (state=" << ueRrc->GetState()
-                                                                  << "), skipping handover.");
+        logAction("blocked-rrc-state");
+        NS_LOG_DEBUG("UE not in CONNECTED_NORMALLY (state=" << ueRrc->GetState()
+                                                            << "), skipping.");
         return;
     }
 
-    // --- Get current cell ID ---
-    uint32_t currentCellId = ueRrc->GetCellId();
+    currentCellId = ueRrc->GetCellId();
 
-    // --- Null check: action dict content ---
-    auto cellIdContainer = DynamicCast<OpenGymDiscreteContainer>(action->Get("newCellId"));
-    if (!cellIdContainer)
+    // --- Precondition: Same cell? ---
+    if (targetCellId == currentCellId)
     {
-        NS_LOG_WARN("Action dict missing 'newCellId', skipping.");
+        logAction("blocked-same-cell");
+        NS_LOG_DEBUG("Target cell " << targetCellId
+                      << " is same as current cell, skipping.");
         return;
     }
-    uint32_t newCellId = cellIdContainer->GetValue();
 
-    // Log every action received from Python (before precondition gates)
+    // --- Precondition: Handover debounce (min interval between EXECUTED handovers) ---
+    if (m_handoverDebounceMs > 0 &&
+        Simulator::Now() - m_lastHandoverTime < MilliSeconds(m_handoverDebounceMs))
+    {
+        logAction("blocked-debounce");
+        NS_LOG_DEBUG("Debounce: last executed handover "
+                     << (Simulator::Now() - m_lastHandoverTime).GetMilliSeconds()
+                     << " ms ago (< " << m_handoverDebounceMs << "), skipping.");
+        return;
+    }
+
+    // --- Log action ---
     if (g_logging)
     {
         std::ofstream actFile(g_outputDir + "rl_action.csv", std::ios_base::app);
         actFile << Simulator::Now().GetSeconds() << ","
                 << currentCellId << ","
-                << newCellId << ","
-                << (currentCellId < g_lastRsrpValues.size() ? g_lastRsrpValues[currentCellId] : -200.0) << ","
-                << (newCellId < g_lastRsrpValues.size() ? g_lastRsrpValues[newCellId] : -200.0) << std::endl;
-    }
-
-    NS_LOG_DEBUG("Handover attempt: cell " << currentCellId << " -> " << newCellId);
-
-    // --- Precondition 3: No-op? ---
-    if (newCellId == 0)
-    {
-        NS_LOG_DEBUG("No-op (action=0), skipping handover.");
-        return;
-    }
-
-    // --- Precondition 4: Same cell? ---
-    if (newCellId == currentCellId)
-    {
-        NS_LOG_DEBUG("Target cell is same as current cell, skipping handover.");
-        return;
-    }
-
-    // --- Precondition 5: Is target cell valid? ---
-    if (newCellId > m_numBs)
-    {
-        NS_LOG_WARN("Invalid target cell ID " << newCellId << " (max=" << m_numBs
-                                              << "), skipping.");
-        return;
+                << targetCellId << ","
+                << (currentCellId < g_lastRsrpValues.size()
+                        ? g_lastRsrpValues[currentCellId] : -200.0)
+                << ","
+                << (targetCellId < g_lastRsrpValues.size()
+                        ? g_lastRsrpValues[targetCellId] : -200.0)
+                << std::endl;
     }
 
     // --- Find the source gNB device by cell ID ---
-    Ptr<NetDevice> sourceEnbDev;
+    Ptr<NetDevice> sourceGnbDev;
     for (uint32_t i = 0; i < g_gnbNrDevs.GetN(); i++)
     {
         Ptr<NrGnbNetDevice> gnbNetDev = g_gnbNrDevs.Get(i)->GetObject<NrGnbNetDevice>();
         if (gnbNetDev && gnbNetDev->GetCellId() == currentCellId)
         {
-            sourceEnbDev = g_gnbNrDevs.Get(i);
+            sourceGnbDev = g_gnbNrDevs.Get(i);
             break;
         }
     }
 
-    if (!sourceEnbDev)
+    if (!sourceGnbDev)
     {
-        NS_LOG_WARN("Could not find source eNB for cell " << currentCellId);
+        logAction("blocked-no-source-gnb");
+        NS_LOG_WARN("Could not find source gNB for cell " << currentCellId);
         return;
     }
 
-    // --- Precondition 6: Get source eNB net device & RRC ---
+    // --- Get source gNB RRC ---
     uint16_t rnti = ueRrc->GetRnti();
-    auto sourceEnbNetDev = sourceEnbDev->GetObject<NrGnbNetDevice>();
-    if (!sourceEnbNetDev)
+    auto sourceGnbNetDev = sourceGnbDev->GetObject<NrGnbNetDevice>();
+    if (!sourceGnbNetDev)
     {
-        NS_LOG_WARN("Source eNB net device is null.");
+        logAction("blocked-no-source-dev");
+        NS_LOG_WARN("Source gNB net device is null.");
         return;
     }
-    auto sourceEnbRrc = sourceEnbNetDev->GetRrc();
-    if (!sourceEnbRrc)
+    auto sourceGnbRrc = sourceGnbNetDev->GetRrc();
+    if (!sourceGnbRrc)
     {
-        NS_LOG_WARN("Source eNB RRC is null.");
-        return;
-    }
-
-    // --- Precondition 7: Does the source eNB have the UE's UeManager? ---
-    if (!sourceEnbRrc->HasUeManager(rnti))
-    {
-        NS_LOG_DEBUG("Source eNB does not have UeManager for RNTI " << rnti);
+        logAction("blocked-no-source-rrc");
+        NS_LOG_WARN("Source gNB RRC is null.");
         return;
     }
 
-    // --- Precondition 8: Is the UE connected to this eNB? ---
+    // --- Precondition: Does the source gNB have the UE's UeManager? ---
+    if (!sourceGnbRrc->HasUeManager(rnti))
+    {
+        logAction("blocked-no-uemanager");
+        NS_LOG_DEBUG("Source gNB does not have UeManager for RNTI " << rnti);
+        return;
+    }
+
+    // --- Precondition: Is the UE connected to this gNB? ---
     auto ueImsi = ueNrDev->GetImsi();
-    auto ueMgr = sourceEnbRrc->GetUeManager(rnti);
+    auto ueMgr = sourceGnbRrc->GetUeManager(rnti);
     if (!ueMgr)
     {
+        logAction("blocked-no-uemanager");
         NS_LOG_DEBUG("UeManager is null for RNTI " << rnti);
         return;
     }
     if (ueImsi != ueMgr->GetImsi())
     {
-        NS_LOG_DEBUG("UE IMSI mismatch at source eNB");
+        logAction("blocked-imsi-mismatch");
+        NS_LOG_DEBUG("UE IMSI mismatch at source gNB");
         return;
     }
 
-    // --- Precondition 9: Is UE amidst handover? ---
+    // --- Precondition: Is UE amidst handover? ---
     if (ueMgr->GetState() != NrUeManager::CONNECTED_NORMALLY)
     {
-        NS_LOG_DEBUG("UE is amidst handover at source eNB, skipping.");
+        logAction("blocked-amidst-handover");
+        NS_LOG_DEBUG("UE is amidst handover at source gNB, skipping.");
         return;
     }
 
     // --- Execute the handover ---
     if (!g_nrHelper)
     {
+        logAction("blocked-no-helper");
         NS_LOG_WARN("g_nrHelper is null, cannot execute handover.");
         return;
     }
 
-    // --- Note: RSRP margin gate removed. SAC does not use the action mask,
-    // so the agent learns from reward signal which cells are worth choosing.
-    // The action mask in the obs app only applies when trainable is PPO.
+    logAction("executed");
+    NS_LOG_INFO(Simulator::Now().GetSeconds() << "s: Handover UE RNTI=" << rnti
+                << " cell " << currentCellId << " -> " << targetCellId
+                << " (actionIndex=" << actionIndex << ")");
 
-    NS_LOG_INFO(Simulator::Now().GetSeconds() << "s: Handover UE RNTI=" << rnti << " cell "
-                                              << currentCellId << " -> " << newCellId);
-
-    std::cout << "Time: " << Simulator::Now().GetSeconds() << "s: Handover UE RNTI=" << rnti
-              << " cell " << currentCellId
-              << " rsrp_curr: " << g_lastRsrpValues[currentCellId]
-              << " rsrq_curr: " << (currentCellId < g_lastRsrqValues.size()
-                                         ? g_lastRsrqValues[currentCellId] : -200.0)
-              << " -> " << newCellId
-              << " rsrp_target: " << g_lastRsrpValues[newCellId]
-              << " rsrq_target: " << (newCellId < g_lastRsrqValues.size()
-                                           ? g_lastRsrqValues[newCellId] : -200.0)
-              << std::endl;
-
+    g_effectiveAction = static_cast<int>(actionIndex);
+    m_lastHandoverTime = Simulator::Now();
     g_handoverInProgress = true;
-    g_nrHelper->HandoverRequest(Seconds(0), g_uavNrDevs.Get(0), sourceEnbDev, newCellId);
+    g_nrHelper->HandoverRequest(Seconds(0), g_uavNrDevs.Get(0), sourceGnbDev, targetCellId);
     g_totalHandovers++;
 }
 

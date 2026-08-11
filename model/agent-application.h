@@ -267,6 +267,7 @@ class AgentApplication : public RlApplication
      */
     virtual void InitiateActionForApp(uint remoteAppId, Ptr<OpenGymDataContainer> action);
 
+  protected:
     /**
      * @brief Overwrite this method to send extra information to the tensorflow board.
      */
@@ -275,6 +276,7 @@ class AgentApplication : public RlApplication
         return {};
     }
 
+  private:
     /**
      * @brief Overwrite this method to set the delay for receiving an action from the agent model.
      * Used to model the computation time of inference or local training.
