@@ -35,6 +35,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -65,7 +66,7 @@ NotifyConnectionSucceeded(Ptr<Socket> socket, const Address& local, const Addres
     g_tcpConnected = true;
     g_tcpAlive = true;
     std::cout << "TCP connection succeeded at time " << Simulator::Now().GetSeconds() << "s"
-              << std::endl;
+              << "\n";
 }
 
 void
@@ -73,7 +74,7 @@ NotifyConnectionFailed(Ptr<Socket> socket, const Address& local, const Address& 
 {
     g_tcpAlive = false;
     std::cout << "TCP connection failed at time " << Simulator::Now().GetSeconds() << "s"
-              << std::endl;
+              << "\n";
 }
 
 void
@@ -83,7 +84,7 @@ NotifyTcpStateChange(const TcpSocket::TcpStates_t oldState, const TcpSocket::Tcp
     const char* newName = TcpSocket::TcpStateName[newState];
 
     std::cout << "TCP state: " << oldName << " -> " << newName
-              << " at t=" << Simulator::Now().GetSeconds() << "s" << std::endl;
+              << " at t=" << Simulator::Now().GetSeconds() << "s" << "\n";
 
     if (newState == TcpSocket::ESTABLISHED)
     {
@@ -97,6 +98,49 @@ NotifyTcpStateChange(const TcpSocket::TcpStates_t oldState, const TcpSocket::Tcp
     }
 }
 
+// ------------------------------------------------------------------------- //
+// Persistent CSV streams. The trace loggers fire thousands of times per
+// second; opening a fresh std::ofstream (open + flush + close syscalls, plus
+// a g_outputDir string concat) per event was the dominant part of the logging
+// overhead (perf 2026-08-13: logging=true costs ~+37% walltime vs off, +2.3 s
+// sys for a 20 s sim). Each CSV now opens ONCE on first use and appends for
+// the rest of the run (std::endl still flushes per line — same durability as
+// before). See REHYDRATION §3h2.
+// ------------------------------------------------------------------------- //
+namespace
+{
+// Persistent per-file output streams (see LogStream below).
+std::unordered_map<std::string, std::ofstream> g_csvStreams;
+} // namespace
+
+std::ofstream&
+LogStream(const std::string& fileName)
+{
+    auto it = g_csvStreams.find(fileName);
+    if (it == g_csvStreams.end())
+    {
+        it = g_csvStreams
+                 .emplace(std::piecewise_construct,
+                          std::forward_as_tuple(fileName),
+                          std::forward_as_tuple(g_outputDir + fileName,
+                                                std::ios_base::app))
+                 .first;
+    }
+    return it->second;
+}
+
+// Flush all persistent CSV streams once. The loggers write with "\n" (no
+// per-line flush — see LogStream); the caller invokes this right after
+// Simulator::Run() so the log files are complete when the run summary prints.
+void
+FlushLogStreams()
+{
+    for (auto& [fileName, stream] : g_csvStreams)
+    {
+        stream.flush();
+    }
+}
+
 // TCP congestion state logger — logs CA_OPEN, CA_DISORDER, CA_RECOVERY, CA_LOSS, CA_CWR
 void
 CongestionStateLogger(TcpSocketState::TcpCongState_t oldState,
@@ -106,10 +150,10 @@ CongestionStateLogger(TcpSocketState::TcpCongState_t oldState,
     const char* newName = TcpSocketState::TcpCongStateName[newState];
 
     std::cout << "TCP congestion: " << oldName << " -> " << newName
-              << " at t=" << Simulator::Now().GetSeconds() << "s" << std::endl;
+              << " at t=" << Simulator::Now().GetSeconds() << "s" << "\n";
 
-    std::ofstream congFile(g_outputDir + "nr-rl-congestion.csv", std::ios_base::app);
-    congFile << Simulator::Now().GetSeconds() << "," << oldName << "," << newName << std::endl;
+    std::ofstream& congFile = LogStream("nr-rl-congestion.csv");
+    congFile << Simulator::Now().GetSeconds() << "," << oldName << "," << newName << "\n";
 }
 
 // HARQ feedback logger — fires when UE sends ACK/NACK on PUCCH/PUSCH
@@ -125,9 +169,9 @@ HarqFeedbackLogger(SfnSf sfn,
     {
         return;
     }
-    std::ofstream harqFile(g_outputDir + "nr-rl-harq.csv", std::ios_base::app);
+    std::ofstream& harqFile = LogStream("nr-rl-harq.csv");
     harqFile << Simulator::Now().GetSeconds() << "," << cellId << "," << (uint32_t)rnti << ","
-             << (uint32_t)bwpId << "," << (uint32_t)harqId << "," << k1Delay << std::endl;
+             << (uint32_t)bwpId << "," << (uint32_t)harqId << "," << k1Delay << "\n";
 }
 
 // SlotDataStats logger — per-slot RB utilization (serving cell only)
@@ -152,10 +196,10 @@ SlotDataStatsLogger(const SfnSf& sfn,
     {
         return;
     }
-    std::ofstream slotFile(g_outputDir + "nr-rl-slot-stats.csv", std::ios_base::app);
+    std::ofstream& slotFile = LogStream("nr-rl-slot-stats.csv");
     slotFile << Simulator::Now().GetSeconds() << "," << (uint32_t)cellId << "," << scheduledUe
              << "," << usedReg << "," << usedSym << "," << availableRb << "," << availableSym << ","
-             << (int)utilPct << std::endl;
+             << (int)utilPct << "\n";
 }
 
 // CWND tracing callback — fires on every CWND change (every ACK)
@@ -166,8 +210,8 @@ CwndTracer(uint32_t oldCwnd, uint32_t newCwnd)
     {
         return;
     }
-    std::ofstream cwndFile(g_outputDir + "nr-rl-cwnd.csv", std::ios_base::app);
-    cwndFile << Simulator::Now().GetSeconds() << "," << newCwnd << std::endl;
+    std::ofstream& cwndFile = LogStream("nr-rl-cwnd.csv");
+    cwndFile << Simulator::Now().GetSeconds() << "," << newCwnd << "\n";
 }
 
 // SrReq logger — fires when a UE sends a Scheduling Request
@@ -178,9 +222,9 @@ SrReqLogger(uint16_t cellId, uint8_t bwpId, uint16_t rnti)
     {
         return;
     }
-    std::ofstream srFile(g_outputDir + "nr-rl-sr.csv", std::ios_base::app);
+    std::ofstream& srFile = LogStream("nr-rl-sr.csv");
     srFile << Simulator::Now().GetSeconds() << "," << (uint32_t)cellId << "," << (uint32_t)bwpId
-           << "," << (uint32_t)rnti << std::endl;
+           << "," << (uint32_t)rnti << "\n";
 }
 
 // DlScheduling logger — fires for every DL scheduling decision
@@ -191,11 +235,11 @@ DlSchedulingLogger(uint16_t cellId, NrSchedulingCallbackInfo traceInfo)
     {
         return;
     }
-    std::ofstream dlSchedFile(g_outputDir + "nr-rl-dl-sched.csv", std::ios_base::app);
+    std::ofstream& dlSchedFile = LogStream("nr-rl-dl-sched.csv");
     dlSchedFile << Simulator::Now().GetSeconds() << "," << cellId << ","
                 << (uint32_t)traceInfo.m_rnti << "," << (uint32_t)traceInfo.m_mcs << ","
                 << traceInfo.m_tbSize << "," << (uint32_t)traceInfo.m_symStart << ","
-                << (uint32_t)traceInfo.m_numSym << std::endl;
+                << (uint32_t)traceInfo.m_numSym << "\n";
 }
 
 // UlScheduling logger — fires for every UL scheduling decision
@@ -206,11 +250,11 @@ UlSchedulingLogger(uint16_t cellId, NrSchedulingCallbackInfo traceInfo)
     {
         return;
     }
-    std::ofstream ulSchedFile(g_outputDir + "nr-rl-ul-sched.csv", std::ios_base::app);
+    std::ofstream& ulSchedFile = LogStream("nr-rl-ul-sched.csv");
     ulSchedFile << Simulator::Now().GetSeconds() << "," << cellId << ","
                 << (uint32_t)traceInfo.m_rnti << "," << (uint32_t)traceInfo.m_mcs << ","
                 << traceInfo.m_tbSize << "," << (uint32_t)traceInfo.m_symStart << ","
-                << (uint32_t)traceInfo.m_numSym << std::endl;
+                << (uint32_t)traceInfo.m_numSym << "\n";
 }
 
 void
@@ -228,31 +272,31 @@ TcpRttChange(Time oldValue, Time newValue)
     g_rttSamples++;
     if (g_logging)
     {
-        std::ofstream rttFile(g_outputDir + "nr-rl-rtt.csv", std::ios_base::app);
-        rttFile << Simulator::Now().GetSeconds() << "," << rttMs << std::endl;
+        std::ofstream& rttFile = LogStream("nr-rl-rtt.csv");
+        rttFile << Simulator::Now().GetSeconds() << "," << rttMs << "\n";
     }
 }
 
 void
 BbrPacingGainChange(double oldValue, double newValue)
 {
-    std::ofstream pacingGainFile(g_outputDir + "nr-rl-pacing-gain.csv", std::ios_base::app);
-    pacingGainFile << Simulator::Now().GetSeconds() << "," << newValue << std::endl;
+    std::ofstream& pacingGainFile = LogStream("nr-rl-pacing-gain.csv");
+    pacingGainFile << Simulator::Now().GetSeconds() << "," << newValue << "\n";
 }
 
 void
 BbrCwndGainChange(double oldValue, double newValue)
 {
-    std::ofstream cwndGainFile(g_outputDir + "nr-rl-cwnd-gain.csv", std::ios_base::app);
-    cwndGainFile << Simulator::Now().GetSeconds() << "," << newValue << std::endl;
+    std::ofstream& cwndGainFile = LogStream("nr-rl-cwnd-gain.csv");
+    cwndGainFile << Simulator::Now().GetSeconds() << "," << newValue << "\n";
 }
 
 void
 TcpRateSampleChange(const TcpRateOps::TcpRateSample& sample)
 {
-    std::ofstream rateFile(g_outputDir + "nr-rl-rate.csv", std::ios_base::app);
+    std::ofstream& rateFile = LogStream("nr-rl-rate.csv");
     rateFile << Simulator::Now().GetSeconds() << "," << sample.m_deliveryRate.GetBitRate()
-             << std::endl;
+             << "\n";
 }
 
 // Track handovers
@@ -271,7 +315,7 @@ UavRrcStateChange(std::string context,
     }
     std::cout << "RRC state change for UE " << imsi << ", RNTI " << rnti << " to cell " << cellId
               << " (state " << oldState << " -> " << newState << ") at time "
-              << Simulator::Now().GetSeconds() << "s" << std::endl;
+              << Simulator::Now().GetSeconds() << "s" << "\n";
     g_currentRnti = rnti;
     g_currentCellId = cellId;
 
@@ -284,8 +328,8 @@ UavRrcStateChange(std::string context,
         g_rlfCount++;
         if (g_logging)
         {
-            std::ofstream rlfFile(g_outputDir + "nr-rl-rlf.csv", std::ios_base::app);
-            rlfFile << Simulator::Now().GetSeconds() << "," << cellId << std::endl;
+            std::ofstream& rlfFile = LogStream("nr-rl-rlf.csv");
+            rlfFile << Simulator::Now().GetSeconds() << "," << cellId << "\n";
         }
         std::cout << "RLF detected at time " << Simulator::Now().GetSeconds() << "s" << std::endl;
     }
@@ -300,9 +344,9 @@ HandoverOk(const uint64_t imsi, const uint16_t cellId, const uint16_t rnti)
     if (g_logging)
     {
         std::cout << "Handover OK for UE " << imsi << ", RNTI " << rnti << " to cell " << cellId
-                  << " at time " << Simulator::Now().GetSeconds() << "s" << std::endl;
-        std::ofstream hoFile(g_outputDir + "nr-rl-handovers.csv", std::ios_base::app);
-        hoFile << Simulator::Now().GetSeconds() << "," << cellId << std::endl;
+                  << " at time " << Simulator::Now().GetSeconds() << "s" << "\n";
+        std::ofstream& hoFile = LogStream("nr-rl-handovers.csv");
+        hoFile << Simulator::Now().GetSeconds() << "," << cellId << "\n";
     }
 
     // only increment when not using the rl app
@@ -316,7 +360,7 @@ void
 HandoverError(const uint64_t imsi, const uint16_t cellId, const uint16_t rnti)
 {
     std::cout << "Handover FAILED for UE " << imsi << ", RNTI " << rnti << " at cell " << cellId
-              << " time " << Simulator::Now().GetSeconds() << "s" << std::endl;
+              << " time " << Simulator::Now().GetSeconds() << "s" << "\n";
     g_handoverInProgress = false;
 }
 
@@ -334,9 +378,9 @@ LogUeMeasReport(uint16_t rnti,
     {
         return;
     }
-    std::ofstream ueMeasFile(g_outputDir + "ue_meas_report.csv", std::ios_base::app);
+    std::ofstream& ueMeasFile = LogStream("ue_meas_report.csv");
     ueMeasFile << Simulator::Now().GetSeconds() << "," << (int)cellId << "," << (int)rnti << ","
-               << rsrp << "," << rsrq << "," << (int)isServingCell << std::endl;
+               << rsrp << "," << rsrq << "," << (int)isServingCell << "\n";
 }
 
 // DL data SINR (UE PHY DlDataSinr) logged to dl_sinr.csv (always present)
@@ -348,9 +392,9 @@ DlDataSinrLogger(uint16_t cellId, uint16_t rnti, double sinrLinear, uint16_t bwp
         return;
     }
     double sinrDb = (sinrLinear > 0.0) ? (10.0 * std::log10(sinrLinear)) : -40.0;
-    std::ofstream dlSinrFile(g_outputDir + "dl_sinr.csv", std::ios_base::app);
+    std::ofstream& dlSinrFile = LogStream("dl_sinr.csv");
     dlSinrFile << Simulator::Now().GetSeconds() << "," << cellId << "," << rnti << "," << sinrDb
-               << std::endl;
+               << "\n";
 }
 
 // UL HARQ feedback logger (gNB PHY)
@@ -359,9 +403,9 @@ UlHarqFeedbackLogger(uint16_t rnti, bool isReceivedOk)
 {
     if (g_logging)
     {
-        std::ofstream harqFile(g_outputDir + "nr-rl-ul-harq.csv", std::ios_base::app);
+        std::ofstream& harqFile = LogStream("nr-rl-ul-harq.csv");
         harqFile << Simulator::Now().GetSeconds() << "," << rnti << "," << (int)isReceivedOk
-                 << std::endl;
+                 << "\n";
     }
 }
 
@@ -371,11 +415,31 @@ UlRxPacketLogger(uint16_t cellId, RxPacketTraceParams params)
 {
     if (g_logging)
     {
-        std::ofstream sinrFile(g_outputDir + "nr-rl-ul-rx-sinr.csv", std::ios_base::app);
+        std::ofstream& sinrFile = LogStream("nr-rl-ul-rx-sinr.csv");
         double sinrDb = (params.m_sinr > 0.0) ? (10.0 * std::log10(params.m_sinr)) : -40.0;
         sinrFile << Simulator::Now().GetSeconds() << "," << cellId << "," << params.m_rnti << ","
                  << sinrDb << "," << (int)params.m_mcs << "," << params.m_tbSize << ","
-                 << (int)params.m_corrupt << "," << params.m_tbler << std::endl;
+                 << (int)params.m_corrupt << "," << params.m_tbler << "\n";
+    }
+}
+
+// DL RX packet logger (UE spectrum PHY, post-beamforming MIMO SINR) — the DL
+// mirror of nr-rl-ul-rx-sinr.csv (2026-08-13). Same RxPacketTraceParams schema:
+// t, cellId, rnti, sinrDb, mcs, tbSize, corrupt, tbler. cellId is the serving
+// cell at TB time (g_currentCellId — the UE's serving cell changes on handover).
+// Source: RxPacketTraceUe on the UE's NrSpectrumPhy (same trace family as the
+// gNB's RxPacketTraceGnb used for the UL).
+void
+DlRxPacketLogger(RxPacketTraceParams params)
+{
+    if (g_logging)
+    {
+        std::ofstream& sinrFile = LogStream("nr-rl-dl-rx-sinr.csv");
+        double sinrDb = (params.m_sinr > 0.0) ? (10.0 * std::log10(params.m_sinr)) : -40.0;
+        sinrFile << Simulator::Now().GetSeconds() << "," << (uint32_t)g_currentCellId << ","
+                 << params.m_rnti << "," << sinrDb << "," << (int)params.m_mcs << ","
+                 << params.m_tbSize << "," << (int)params.m_corrupt << "," << params.m_tbler
+                 << "\n";
     }
 }
 
@@ -390,6 +454,13 @@ UlRxPacketLogger(uint16_t cellId, RxPacketTraceParams params)
 // without antenna offset), the channel model produces NaN Doppler values,
 // which causes all SINR entries to be NaN and get clamped to -40 dB.
 // Always apply a small (>= 1 m) antenna offset between co-located gNBs.
+//
+// FIX (2026-08-13): this trace (despite the "srs" name) fires from the UL
+// DATA CQI report (GenerateDataCqiReport -> pData chunk) and carries the
+// FULL-BAND per-RB SINR spectrum. RBs not used by the UL transmission sit at
+// the -40 dB sentinel and dragged the average down by ~20 dB under light UL
+// load (verified: per-TB SINR 21.5 dB vs logged 1.7 dB at 17% UL utilization).
+// The average now covers only the RBs with a real SINR (> 1e-12).
 void
 UlSrsSinrLogger(uint16_t cellId,
                 uint64_t imsi,
@@ -408,18 +479,72 @@ UlSrsSinrLogger(uint16_t cellId,
     uint32_t numRb = 0;
     for (auto it = sinrSpectrum.ConstValuesBegin(); it != sinrSpectrum.ConstValuesEnd(); ++it)
     {
-        double sinrDb = (*it > 1e-12) ? (10.0 * std::log10(*it)) : -40.0;
-        sumSinr += sinrDb;
-        numRb++;
+        if (*it > 1e-12)
+        {
+            sumSinr += 10.0 * std::log10(*it);
+            numRb++;
+        }
     }
     if (numRb == 0)
     {
         return;
     }
     double sinrDb = sumSinr / static_cast<double>(numRb);
-    std::ofstream ulSrsFile(g_outputDir + "ul_sinr_srs.csv", std::ios_base::app);
+    std::ofstream& ulSrsFile = LogStream("ul_sinr_srs.csv");
     ulSrsFile << Simulator::Now().GetSeconds() << "," << (uint32_t)cellId << "," << sinrDb
-              << std::endl;
+              << "\n";
+}
+
+// UL SINR capture (always on): RB-averaged UL SINR per slot ->
+// g_lastSinrValues[cellId] (latest) and the per-cell step accumulators
+// g_ulSinrSum/g_ulSinrCount (mean over the obs step, reset by the obs app).
+// Same full-band fix as UlSrsSinrLogger (2026-08-13): average only RBs with a
+// real SINR, not the -40 idle sentinels.
+void
+CaptureUlSrsSinr(uint16_t cellId, uint64_t /* imsi */, SpectrumValue& sinrSpectrum, SpectrumValue& /* interference */)
+{
+    double sumSinr = 0.0;
+    uint32_t numRb = 0;
+    for (auto it = sinrSpectrum.ConstValuesBegin(); it != sinrSpectrum.ConstValuesEnd(); ++it)
+    {
+        if (*it > 1e-12)
+        {
+            sumSinr += 10.0 * std::log10(*it);
+            numRb++;
+        }
+    }
+    if (numRb > 0 && cellId < g_lastSinrValues.size())
+    {
+        const double rbMean = sumSinr / static_cast<double>(numRb);
+        g_lastSinrValues[cellId] = rbMean;
+        if (cellId < g_ulSinrSum.size())
+        {
+            g_ulSinrSum[cellId] += rbMean;
+            g_ulSinrCount[cellId]++;
+        }
+    }
+}
+
+// UL slot-stat capture (always on): serving-cell UL RB utilization + scheduled
+// UE count -> globals for the obs UL-load features.
+void
+CaptureSlotDataStats(const SfnSf& /* sfn */,
+                     uint32_t scheduledUe,
+                     uint32_t usedReg,
+                     uint32_t /* dataSym */,
+                     uint32_t availableRb,
+                     uint32_t availableSym,
+                     uint16_t /* bwpId */,
+                     uint16_t cellId)
+{
+    if (cellId != static_cast<uint16_t>(g_currentCellId))
+    {
+        return;
+    }
+    g_ulServingSchedUe = scheduledUe;
+    g_ulServingRbUtil = (availableRb > 0 && availableSym > 0)
+                            ? std::min(1.0, static_cast<double>(usedReg) / (availableRb * availableSym))
+                            : 0.0;
 }
 
 // UE TX power logger
@@ -430,9 +555,9 @@ ReportUeTxPower(uint16_t cellId, uint16_t rnti, double powerDbm)
     {
         return;
     }
-    std::ofstream txPowerFile(g_outputDir + "ue_tx_power.csv", std::ios_base::app);
+    std::ofstream& txPowerFile = LogStream("ue_tx_power.csv");
     txPowerFile << Simulator::Now().GetSeconds() << "," << cellId << "," << rnti << "," << powerDbm
-                << std::endl;
+                << "\n";
 }
 
 void
@@ -443,9 +568,9 @@ UavPeriodicPositionLog()
         Ptr<MobilityModel> mob = g_uavContainer.Get(0)->GetObject<MobilityModel>();
         if (mob)
         {
-            std::ofstream mobilityFile(g_outputDir + "mobility.csv", std::ios_base::app);
+            std::ofstream& mobilityFile = LogStream("mobility.csv");
             mobilityFile << Simulator::Now().GetSeconds() << "," << mob->GetPosition() << "," << 0
-                         << std::endl;
+                         << "\n";
         }
     }
     // Re-schedule every 500ms
@@ -460,7 +585,7 @@ SimHeartbeatLog()
     std::cout << "[HEARTBEAT #" << beatCount << "] t=" << Simulator::Now().GetSeconds()
               << "s cellId=" << g_currentCellId << " hoCount=" << g_totalHandovers
               << " nEvents=" << Simulator::GetEventCount()
-              << " hoInProgress=" << g_handoverInProgress << std::endl;
+              << " hoInProgress=" << g_handoverInProgress << "\n";
     Simulator::Schedule(Seconds(1.0), &SimHeartbeatLog);
 }
 
@@ -472,7 +597,7 @@ WatchdogLog()
     if (wdCount <= 30 || wdCount % 10 == 0) // first 30 every 100ms, then every 1s
     {
         std::cout << "[WATCHDOG " << wdCount << "] t=" << Simulator::Now().GetSeconds()
-                  << "s nEvents=" << Simulator::GetEventCount() << std::endl;
+                  << "s nEvents=" << Simulator::GetEventCount() << "\n";
     }
     if (wdCount < 100) // stop after 10s sim time
     {
@@ -483,9 +608,9 @@ WatchdogLog()
 void
 MobilityCourseChange(std::string context, Ptr<const MobilityModel> model)
 {
-    std::ofstream mobilityFile(g_outputDir + "mobility.csv", std::ios_base::app);
+    std::ofstream& mobilityFile = LogStream("mobility.csv");
     mobilityFile << Simulator::Now().GetSeconds() << "," << model->GetPosition() << "," << 1
-                 << std::endl;
+                 << "\n";
 }
 
 /**
@@ -502,7 +627,7 @@ void
 LogGnbAntennas()
 {
     std::ofstream antFile(g_outputDir + "gnb-antennas.csv");
-    antFile << "cellId,x,y,z,bearingDeg,downtiltDeg" << std::endl;
+    antFile << "cellId,x,y,z,bearingDeg,downtiltDeg" << "\n";
     for (uint32_t i = 0; i < g_gnbNrDevs.GetN(); ++i)
     {
         Ptr<NrGnbPhy> phy = NrHelper::GetGnbPhy(g_gnbNrDevs.Get(i), 0);
@@ -516,7 +641,7 @@ LogGnbAntennas()
         uint32_t cellId = g_gnbNrDevs.Get(i)->GetObject<NrGnbNetDevice>()->GetCellId();
         antFile << cellId << "," << pos.x << "," << pos.y << "," << pos.z << ","
                 << antenna->GetAlpha() * 180.0 / M_PI << ","
-                << antenna->GetBeta() * 180.0 / M_PI << std::endl;
+                << antenna->GetBeta() * 180.0 / M_PI << "\n";
     }
 }
 
@@ -527,16 +652,16 @@ SinkRxPacket(Ptr<const Packet> packet, const Address& address)
     g_totalRxBytes += size;
     if (g_logging)
     {
-        std::ofstream sinkFile(g_outputDir + "sink-packets.csv", std::ios_base::app);
-        sinkFile << Simulator::Now().GetSeconds() << "," << size << std::endl;
+        std::ofstream& sinkFile = LogStream("sink-packets.csv");
+        sinkFile << Simulator::Now().GetSeconds() << "," << size << "\n";
     }
 }
 
 void
 SourceTxPacket(Ptr<const Packet> packet, const Address& local, const Address& remote)
 {
-    std::ofstream sourceBulkSenderFile(g_outputDir + "source-packets.csv", std::ios_base::app);
-    sourceBulkSenderFile << Simulator::Now().GetSeconds() << "," << packet->GetSize() << std::endl;
+    std::ofstream& sourceBulkSenderFile = LogStream("source-packets.csv");
+    sourceBulkSenderFile << Simulator::Now().GetSeconds() << "," << packet->GetSize() << "\n";
 }
 
 void
@@ -549,9 +674,9 @@ SourceRetransmissionPacket(const Ptr<const Packet> packet,
     g_totalRetransmissions++;
     if (g_logging)
     {
-        std::ofstream retransmissionFile(g_outputDir + "retransmissions.csv", std::ios_base::app);
+        std::ofstream& retransmissionFile = LogStream("retransmissions.csv");
         retransmissionFile << Simulator::Now().GetSeconds() << "," << packet->GetSize()
-                           << std::endl;
+                           << "\n";
     }
 }
 
@@ -590,6 +715,129 @@ ComputeGnbBoundingBox(NodeContainer gnbNodes, double padding)
     return {minX, maxX, minY, maxY};
 }
 
+/**
+ * @brief Record a waypoint in the plan (mobility model + trajectory-obs table).
+ */
+static void
+AddUavWaypoint(Ptr<WaypointMobilityModel> mob, Time t, const Vector& p)
+{
+    Waypoint w(t, p);
+    mob->AddWaypoint(w);
+    g_uavWaypoints.push_back(w);
+}
+
+/**
+ * @brief Install the UAV mobility model and generate its waypoint plan.
+ *
+ * Consolidation of the per-topology duplicated blocks (2026-08-12). The plan
+ * depends ONLY on (seed, runId): the waypoint RNGs are pinned to fixed streams
+ * (100/101/102) so rlMode must not shift the waypoints (trajectory isolation
+ * for the matched A3-vs-RL comparison). Draw ORDER is preserved per topology:
+ * hexgrid/triangle draw the start position from rbx/rby (randomStart=true);
+ * simple uses a centered start (no start draws). Do NOT reorder the draws —
+ * that would change every trajectory and invalidate all baselines.
+ *
+ * @param uav UAV node
+ * @param bbox movement bounding box
+ * @param startHeight initial altitude (m)
+ * @param endHeight max altitude (m)
+ * @param ueSpeed speed (m/s)
+ * @param simDuration sim duration (s) — plan generated up to 2x
+ * @param travelLegMin minimum leg length (m)
+ * @param travelLegMax maximum leg length (m)
+ * @param randomStart true = draw start (x,y) from rbx/rby; false = centered
+ * @param constantPos position for uavMobility == "constant" (per topology)
+ * @param mobility "constant" | "ascend-random" | "random-waypoint"
+ */
+static void
+InstallUavMobility(Ptr<Node> uav,
+                   const BoundingBox& bbox,
+                   double startHeight,
+                   double endHeight,
+                   double ueSpeed,
+                   double simDuration,
+                   double travelLegMin,
+                   double travelLegMax,
+                   bool randomStart,
+                   const Vector& constantPos,
+                   const std::string& mobility)
+{
+    if (mobility == "constant")
+    {
+        MobilityHelper uavMob;
+        uavMob.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+        uavMob.Install(uav);
+        uav->GetObject<ConstantPositionMobilityModel>()->SetPosition(constantPos);
+        return;
+    }
+
+    double dwellTime = 2.0;
+    Ptr<UniformRandomVariable> rbx = CreateObject<UniformRandomVariable>();
+    rbx->SetAttribute("Min", DoubleValue(bbox.minX));
+    rbx->SetAttribute("Max", DoubleValue(bbox.maxX));
+    Ptr<UniformRandomVariable> rby = CreateObject<UniformRandomVariable>();
+    rby->SetAttribute("Min", DoubleValue(bbox.minY));
+    rby->SetAttribute("Max", DoubleValue(bbox.maxY));
+    Ptr<UniformRandomVariable> rbz = CreateObject<UniformRandomVariable>();
+    rbz->SetAttribute("Min", DoubleValue(startHeight));
+    rbz->SetAttribute("Max", DoubleValue(endHeight));
+    // Trajectory isolation (matched A3-vs-RL comparison): pin the UAV waypoint
+    // RNGs to fixed streams so the plan depends ONLY on (seed, runId) —
+    // rlMode must not shift the waypoints (2026-08-11).
+    rbx->SetStream(100);
+    rby->SetStream(101);
+    rbz->SetStream(102);
+
+    Ptr<WaypointMobilityModel> wpMob = CreateObject<WaypointMobilityModel>();
+    uav->AggregateObject(wpMob);
+
+    double currentTime;
+    Vector currentPos;
+    if (mobility == "ascend-random")
+    {
+        Vector startPos = randomStart
+                              ? Vector(rbx->GetValue(), rby->GetValue(), 1.5)
+                              : Vector((bbox.minX + bbox.maxX) / 2.0,
+                                       (bbox.minY + bbox.maxY) / 2.0,
+                                       1.5);
+        AddUavWaypoint(wpMob, Seconds(0.0), startPos);
+        AddUavWaypoint(wpMob, Seconds(dwellTime), startPos);
+        double ascentTime = (startHeight - 1.5) / ueSpeed;
+        Vector ascentEnd(startPos.x, startPos.y, startHeight);
+        AddUavWaypoint(wpMob, Seconds(dwellTime + ascentTime), ascentEnd);
+        currentPos = ascentEnd;
+        currentTime = dwellTime + ascentTime;
+    }
+    else // "random-waypoint"
+    {
+        Vector startPos = randomStart
+                              ? Vector(rbx->GetValue(), rby->GetValue(), startHeight)
+                              : Vector((bbox.minX + bbox.maxX) / 2.0,
+                                       (bbox.minY + bbox.maxY) / 2.0,
+                                       startHeight);
+        AddUavWaypoint(wpMob, Seconds(0.0), startPos);
+        AddUavWaypoint(wpMob, Seconds(dwellTime), startPos);
+        currentPos = startPos;
+        currentTime = dwellTime;
+    }
+
+    while (currentTime < simDuration * 2)
+    {
+        Vector nextPos;
+        double dist;
+        do
+        {
+            nextPos = Vector(rbx->GetValue(), rby->GetValue(), rbz->GetValue());
+            dist = CalculateDistance(currentPos, nextPos);
+        } while (dist < travelLegMin || dist > travelLegMax);
+        double travelTime = dist / ueSpeed;
+        currentTime += travelTime;
+        AddUavWaypoint(wpMob, Seconds(currentTime), nextPos);
+        currentPos = nextPos;
+    }
+}
+
+
 // ------------------------------------------------------------------------- //
 // scenarioSetup
 // ------------------------------------------------------------------------- //
@@ -598,6 +846,8 @@ scenarioSetup(std::string flowDirection = "ul",
               std::string transportProtocol = "tcp",
               double ueSpeed = 20.0,            // m/s
               double simDuration = 80.0,        // seconds
+              uint32_t bandwidthMhz = 20,       // MHz (10 = fast iteration)
+              double trafficRateMbps = 100.0,   // UAV OnOff data rate (Mbps)
               double intersiteDistance = 500.0, // m
               uint32_t numMacroCells = 7,       // number of macro sites
               double gnbDowntilt = 10.0,        // degrees
@@ -623,18 +873,20 @@ scenarioSetup(std::string flowDirection = "ul",
               double rlBetaGoodput = 5.0,
               double rlBetaHandover = 60.0,
               const std::string& rlRewardComposition = "additive",
-              bool useTbsObservation = true,
               double rlPingPongMultiplier = 5.0,
+              uint32_t rlHandoverHangoverLength = 4,
               bool rlHandoverRatePenalty = false,
               uint32_t rlHandoverRateWindowMs = 10000,
               uint32_t rlHandoverRateBudget = 2,
               double rlHandoverRateLambda = 0.2,
-              uint32_t rlTopN = 3,
-              uint32_t rlHandoverDebounceMs = 0,
               double rlRewardRefMbps = 40.0,
               std::string rlRewardGoodputShape = "deng",
               double rlRewardGoodputAlpha = 3.0,
               double rlRewardGoodputP = 0.4,
+              uint32_t rlcTxBufferBytes = 180000, // RLC TX buffer cap (0 = unlimited)
+              std::string errorModel = "eesm-ir-t1", // eesm-ir-t1 | eesm-ir-t2 | eesm-cc-t2 | eesm-cc-t1 | lte-mi
+              uint32_t channelUpdateMs = 50,       // channel UpdatePeriod (0 = disabled/module default; 50 default: 50 ms x 20 m/s = 1 m step)
+              std::string channelModel = "umav",   // channel: umav (3GPP UMa-AV, default) | tworay (TwoRaySpectrumPropagationLossModel)
               std::string outputDir = "")
 {
     if (outputDir.empty())
@@ -650,6 +902,9 @@ scenarioSetup(std::string flowDirection = "ul",
         }
     }
 
+    // Episode duration for the obs-app lookahead clamp (pos2s).
+    g_simDuration = simDuration;
+
     // Travel leg constraints for UAV waypoint generation
     const double travelLegMin = 80.0;
     const double travelLegMax = 200.0;
@@ -663,65 +918,92 @@ scenarioSetup(std::string flowDirection = "ul",
     {
         std::cout << "Logging to: " << g_outputDir << std::endl;
         std::filesystem::create_directories(g_outputDir);
-        for (auto f : {"nr-rl-cwnd.csv",      "nr-rl-handovers.csv",   "nr-rl-rate.csv",
-                       "nr-rl-cwnd-gain.csv", "nr-rl-pacing-gain.csv", "nr-rl-rtt.csv",
-                       "dl_sinr.csv",         "ul_sinr_srs.csv",       "rsrp_sinr.csv",
-                       "ue_meas_report.csv",  "mobility.csv",          "sink-packets.csv",
-                       "source-packets.csv",  "retransmissions.csv",   "ue_tx_power.csv",
-                       "rl_obs.csv",          "rl_reward.csv",         "rl_action.csv",
-                       "rl_actions_full.csv", "nr-rl-harq.csv",        "nr-rl-congestion.csv",  "nr-rl-slot-stats.csv",
-                       "nr-rl-rlf.csv",       "nr-rl-sr.csv",          "nr-rl-dl-sched.csv",
-                       "nr-rl-ul-sched.csv",  "nr-rl-ul-harq.csv",     "nr-rl-ul-rx-sinr.csv",
-                       "gnb-antennas.csv"})
+        // Clear data files and write one-time CSV headers (the loggers below
+        // only ever append). Every log file is self-describing: header rows
+        // name the columns, so the Python readers (plot-nr-rl-stats.py,
+        // run-evaluation.py, feature-importance.py, ...) parse by name.
+        // gnb-antennas.csv is excluded: LogGnbAntennas() writes its own header
+        // (truncate mode). Keep this map in sync with the loggers and readers.
+        const std::vector<std::pair<std::string, std::string>> csvHeaders = {
+            {"nr-rl-cwnd.csv",       "time,cwnd"},
+            {"nr-rl-handovers.csv",  "time,cellId"},
+            {"nr-rl-rate.csv",       "time,deliveryRateBps"},
+            {"nr-rl-cwnd-gain.csv",  "time,cwndGain"},
+            {"nr-rl-pacing-gain.csv","time,pacingGain"},
+            {"nr-rl-rtt.csv",        "time,rttMs"},
+            {"dl_sinr.csv",          "time,cellId,rnti,sinrDb"},
+            {"ul_sinr_srs.csv",      "time,cellId,sinrDb"},
+            {"ue_meas_report.csv",   "time,cellId,rnti,rsrpDbm,rsrqDb,isServingCell"},
+            {"mobility.csv",         "time,position,isWaypoint"},
+            {"sink-packets.csv",     "time,packetSizeBytes"},
+            {"source-packets.csv",   "time,packetSizeBytes"},
+            {"retransmissions.csv",  "time,packetSizeBytes"},
+            {"ue_tx_power.csv",      "time,cellId,rnti,txPowerDbm"},
+            {"rl_obs.csv",           "time,serving_rsrp,serving_rsrq,slot_rsrp_0,slot_rsrp_1,slot_rsrp_2,rsrp_delta_0,rsrp_delta_1,rsrp_delta_2,dl_sinr,time_since_ho,norm_goodput,ho_count_10s,ul_sinr,ul_rb_util,ul_sched_ue,d_serving_rsrp,d_serving_sinr,d_serving_rsrq,d_norm_goodput,d_margin_best,d_slot_rsrp_0,d_slot_rsrp_1,d_slot_rsrp_2,heading_x,heading_y,heading_z,pos_x,pos_y,pos_z,pos2s_x,pos2s_y,pos2s_z"},
+            {"rl_reward.csv",        "time,goodputMbps,dynRefMbps,dynMinMbps,normGoodputRaw,normGoodput,R_G,I_ho,R_H,pingPong,reward"},
+            {"rl_action.csv",        "time,currentCellId,targetCellId,srcRsrpDbm,targetRsrpDbm"},
+            {"rl_actions_full.csv",  "time,actionIndex,targetCellId,currentCellId,outcome"},
+            {"nr-rl-harq.csv",       "time,cellId,rnti,bwpId,harqId,k1Delay"},
+            {"nr-rl-congestion.csv", "time,oldState,newState"},
+            {"nr-rl-slot-stats.csv", "time,cellId,scheduledUe,usedReg,usedSym,availableRb,availableSym,utilPct"},
+            {"nr-rl-rlf.csv",        "time,cellId"},
+            {"nr-rl-sr.csv",         "time,cellId,bwpId,rnti"},
+            {"nr-rl-dl-sched.csv",   "time,cellId,rnti,mcs,tbSize,symStart,numSym"},
+            {"nr-rl-ul-sched.csv",   "time,cellId,rnti,mcs,tbSize,symStart,numSym"},
+            {"nr-rl-ul-harq.csv",    "time,rnti,isReceivedOk"},
+            {"nr-rl-ul-rx-sinr.csv", "time,cellId,rnti,sinrDb,mcs,tbSize,corrupt,tbler"},
+            {"nr-rl-dl-rx-sinr.csv", "time,cellId,rnti,sinrDb,mcs,tbSize,corrupt,tbler"},
+        };
+        for (const auto& [fileName, header] : csvHeaders)
         {
-            std::ofstream fout(g_outputDir + f);
-            // truncate on open
+            std::ofstream fout(g_outputDir + fileName);
+            fout << header << "\n";
         }
 
         // Write meta.yaml with input parameters for reproducibility
         std::ofstream metaOut(g_outputDir + "meta.yaml");
-        metaOut << "# Simulation metadata — auto-generated by scenarioSetup" << std::endl;
-        metaOut << "flowDirection: " << flowDirection << std::endl;
-        metaOut << "transportProtocol: " << transportProtocol << std::endl;
-        metaOut << "ueSpeed: " << ueSpeed << std::endl;
-        metaOut << "simDuration: " << simDuration << std::endl;
-        metaOut << "intersiteDistance: " << intersiteDistance << std::endl;
-        metaOut << "numMacroCells: " << numMacroCells << std::endl;
-        metaOut << "gnbDowntilt: " << gnbDowntilt << std::endl;
-        metaOut << "seed: " << seed << std::endl;
-        metaOut << "runId: " << runId << std::endl;
-        metaOut << "trialName: " << trialName << std::endl;
-        metaOut << "tcpVariant: " << tcpVariant << std::endl;
-        metaOut << "uavMobility: " << uavMobility << std::endl;
-        metaOut << "topology: " << topology << std::endl;
-        metaOut << "startHeight: " << startHeight << std::endl;
-        metaOut << "endHeight: " << endHeight << std::endl;
-        metaOut << "bbrWindowLength: " << bbrWindowLength << std::endl;
-        metaOut << "addInterferingUes: " << addInterferingUes << std::endl;
-        metaOut << "aerialUeRatio: " << aerialUeRatio << std::endl;
-        metaOut << "rlMode: " << (rlMode ? "true" : "false") << std::endl;
-        metaOut << "handoverAlgorithm: " << handoverAlgorithm << std::endl;
-        metaOut << "stepTime: " << stepTime << std::endl;
-        metaOut << "delay: " << delay << std::endl;
-        metaOut << "handoverMargin: " << handoverMargin << std::endl;
-        metaOut << "handoverPenalty: " << handoverPenalty << std::endl;
-        metaOut << "rlAlphaGoodput: " << rlAlphaGoodput << std::endl;
-        metaOut << "rlBetaGoodput: " << rlBetaGoodput << std::endl;
-        metaOut << "rlBetaHandover: " << rlBetaHandover << std::endl;
-        metaOut << "rlRewardComposition: " << rlRewardComposition << std::endl;
-        metaOut << "useTbsObservation: " << (useTbsObservation ? "true" : "false") << std::endl;
-        metaOut << "rlPingPongMultiplier: " << rlPingPongMultiplier << std::endl;
-        metaOut << "rlHandoverRatePenalty: " << (rlHandoverRatePenalty ? "true" : "false") << std::endl;
-        metaOut << "rlHandoverRateWindowMs: " << rlHandoverRateWindowMs << std::endl;
-        metaOut << "rlHandoverRateBudget: " << rlHandoverRateBudget << std::endl;
-        metaOut << "rlHandoverRateLambda: " << rlHandoverRateLambda << std::endl;
-        metaOut << "rlTopN: " << rlTopN << std::endl;
-        metaOut << "rlHandoverDebounceMs: " << rlHandoverDebounceMs << std::endl;
-        metaOut << "rlRewardRefMbps: " << rlRewardRefMbps << std::endl;
-        metaOut << "rlRewardGoodputShape: " << rlRewardGoodputShape << std::endl;
-        metaOut << "rlRewardGoodputAlpha: " << rlRewardGoodputAlpha << std::endl;
-        metaOut << "rlRewardGoodputP: " << rlRewardGoodputP << std::endl;
-        metaOut << "outputDir: " << g_outputDir << std::endl;
+        metaOut << "# Simulation metadata — auto-generated by scenarioSetup" << "\n";
+        metaOut << "flowDirection: " << flowDirection << "\n";
+        metaOut << "transportProtocol: " << transportProtocol << "\n";
+        metaOut << "ueSpeed: " << ueSpeed << "\n";
+        metaOut << "simDuration: " << simDuration << "\n";
+        metaOut << "bandwidthMhz: " << bandwidthMhz << "\n";
+        metaOut << "trafficRateMbps: " << trafficRateMbps << "\n";
+        metaOut << "intersiteDistance: " << intersiteDistance << "\n";
+        metaOut << "numMacroCells: " << numMacroCells << "\n";
+        metaOut << "gnbDowntilt: " << gnbDowntilt << "\n";
+        metaOut << "seed: " << seed << "\n";
+        metaOut << "runId: " << runId << "\n";
+        metaOut << "trialName: " << trialName << "\n";
+        metaOut << "tcpVariant: " << tcpVariant << "\n";
+        metaOut << "uavMobility: " << uavMobility << "\n";
+        metaOut << "topology: " << topology << "\n";
+        metaOut << "startHeight: " << startHeight << "\n";
+        metaOut << "endHeight: " << endHeight << "\n";
+        metaOut << "bbrWindowLength: " << bbrWindowLength << "\n";
+        metaOut << "addInterferingUes: " << addInterferingUes << "\n";
+        metaOut << "aerialUeRatio: " << aerialUeRatio << "\n";
+        metaOut << "rlMode: " << (rlMode ? "true" : "false") << "\n";
+        metaOut << "handoverAlgorithm: " << handoverAlgorithm << "\n";
+        metaOut << "stepTime: " << stepTime << "\n";
+        metaOut << "delay: " << delay << "\n";
+        metaOut << "handoverMargin: " << handoverMargin << "\n";
+        metaOut << "handoverPenalty: " << handoverPenalty << "\n";
+        metaOut << "rlAlphaGoodput: " << rlAlphaGoodput << "\n";
+        metaOut << "rlBetaGoodput: " << rlBetaGoodput << "\n";
+        metaOut << "rlBetaHandover: " << rlBetaHandover << "\n";
+        metaOut << "rlRewardComposition: " << rlRewardComposition << "\n";
+        metaOut << "rlPingPongMultiplier: " << rlPingPongMultiplier << "\n";
+        metaOut << "rlHandoverHangoverLength: " << rlHandoverHangoverLength << "\n";
+        metaOut << "rlHandoverRatePenalty: " << (rlHandoverRatePenalty ? "true" : "false") << "\n";
+        metaOut << "rlHandoverRateWindowMs: " << rlHandoverRateWindowMs << "\n";
+        metaOut << "rlHandoverRateBudget: " << rlHandoverRateBudget << "\n";
+        metaOut << "rlHandoverRateLambda: " << rlHandoverRateLambda << "\n";
+        metaOut << "rlRewardRefMbps: " << rlRewardRefMbps << "\n";
+        metaOut << "rlRewardGoodputShape: " << rlRewardGoodputShape << "\n";
+        metaOut << "rlRewardGoodputAlpha: " << rlRewardGoodputAlpha << "\n";
+        metaOut << "rlRewardGoodputP: " << rlRewardGoodputP << "\n";
+        metaOut << "outputDir: " << g_outputDir << "\n";
     }
 
     // ---- NR Helper Setup ---------------------------------------------------- //
@@ -732,32 +1014,72 @@ scenarioSetup(std::string flowDirection = "ul",
     g_nrHelper->SetBeamformingHelper(idealBeamformingHelper);
     g_nrHelper->SetEpcHelper(g_nrEpcHelper);
 
-    // --- Spectrum: one band @ 3.5 GHz, 20 MHz, 1 CC, 1 BWP, numerology 0 --- //
+    // --- Spectrum: one band @ 3.5 GHz, bandwidthMhz MHz (default 20), 1 CC, 1 BWP, numerology 0 --- //
     // Some common values from Switzerland //
     // Subcarrier spacing = 1 (numerology)
     // Bandwidth 100MHz matching ~n78 5G Band name
     // Center frequency 3.5GHz
     // However for faster iteration, use a smaller bandwidth and numerology
     const double centralFrequency = 3.5e9; // 3.5 GHz (FR1)
-    const double bandwidth = 20e6;         // 20 MHz
+    const double bandwidth = bandwidthMhz * 1e6; // e.g. 20 MHz (106 RBs) or 10 MHz (52 RBs)
     const uint16_t numerology = 0;         // 15 kHz SCS
     CcBwpCreator ccBwpCreator;
     CcBwpCreator::SimpleOperationBandConf bandConf(centralFrequency, bandwidth, 1);
     OperationBandInfo band = ccBwpCreator.CreateOperationBandContiguousCc(bandConf);
 
     // --- Channel: 3GPP TR 38.901 UMa (Urban Macro), default LOS condition --- //
-    // NOTE: UpdatePeriod must be set on both ThreeGppChannelModel AND the channel condition model
-    Config::SetDefault("ns3::ThreeGppChannelModel::UpdatePeriod", TimeValue(MilliSeconds(100)));
-    g_nrChannelHelper->ConfigureFactories("UMa-AV", "Default", "ThreeGpp");
-    g_nrChannelHelper->SetChannelConditionModelAttribute("UpdatePeriod",
-                                                         TimeValue(MilliSeconds(100)));
-    g_nrChannelHelper->SetPathlossAttribute("ShadowingEnabled", BooleanValue(true));
+    // CLI --channelUpdateMs: 50 default (50 ms x 20 m/s = 1 m spatial-consistency
+    // step); 0 disables the spatial-consistency / LOS-NLOS evolution (the module
+    // default = frozen realization). CLI --channelModel=tworay swaps in
+    // TwoRaySpectrumPropagationLossModel: drops the 3GPP CHANNEL MATRIX machinery
+    // (GenSpectrumChannelMatrix + UpdatePeriod spatial consistency + MIMO spatial
+    // correlation — the dominant radio cost, REHYDRATION §3h2). NOTE: the TwoRay
+    // model DOES keep a phased-array beamforming gain (array response x BF
+    // vector, NLOS penalty x1/19) and FTR small-scale fading + LOS corrections —
+    // what goes away is the matrix, not beamforming/fading. The physics differ
+    // though (UMa condition model, FTR fading): median DL SINR 11 vs 25 dB —
+    // benchmark-only unless deliberately chosen.
+    if (channelModel == "tworay")
+    {
+        // UMa-AV with the TwoRay spectrum model: the two-ray model now accepts
+        // the UMa-AV scenario (its FTR fading aliases the UMa calibration;
+        // the condition + propagation models stay UMa-AV via the helper).
+        g_nrChannelHelper->ConfigureFactories("UMa-AV", "Default", "TwoRay");
+    }
+    else
+    {
+        Config::SetDefault("ns3::ThreeGppChannelModel::UpdatePeriod",
+                           TimeValue(MilliSeconds(channelUpdateMs)));
+        g_nrChannelHelper->ConfigureFactories("UMa-AV", "Default", "ThreeGpp");
+        g_nrChannelHelper->SetChannelConditionModelAttribute("UpdatePeriod",
+                                                             TimeValue(MilliSeconds(channelUpdateMs)));
+        g_nrChannelHelper->SetPathlossAttribute("ShadowingEnabled", BooleanValue(true));
+    }
     g_nrChannelHelper->AssignChannelsToBands({band});
 
     // --- Scheduler, error model, beamforming --- //
-    g_nrHelper->SetSchedulerTypeId(TypeId::LookupByName("ns3::NrMacSchedulerTdmaPF"));
-    g_nrHelper->SetDlErrorModel("ns3::NrEesmIrT2");
-    g_nrHelper->SetUlErrorModel("ns3::NrEesmIrT2");
+    // 5G NR DL is OFDMA by design; a TDMA scheduler (one UE per slot, whole
+    // band) under-utilizes the band and inflates full-band interference from
+    // neighbor cells. Switched from NrMacSchedulerTdmaPF to OfdmaPF 2026-08-12:
+    // multiple UEs share each slot on disjoint RBGs — the UAV keeps the band
+    // most slots while sparse 1 Mbps interferers take a few RBGs.
+    g_nrHelper->SetSchedulerTypeId(TypeId::LookupByName("ns3::NrMacSchedulerOfdmaPF"));
+    // PHY error model (CLI --errorModel): NR EESM HARQ-CC/IR x MCS Table 1/2
+    // (Table 2 = 256-QAM up to MCS 27, aggressive; Table 1 = 64-QAM, robust)
+    // or LTE-MI (NrLteMiErrorModel, the module default). Default eesm-ir-t1
+    // (MCS Table 1 / 64-QAM): measured ~60% more UL goodput than Table 2 under
+    // the volatile UAV channel (RL-AUDIT §10).
+    std::string errorModelType = "ns3::NrEesmIrT2";
+    if (errorModel == "eesm-ir-t1")
+        errorModelType = "ns3::NrEesmIrT1";
+    else if (errorModel == "eesm-cc-t2")
+        errorModelType = "ns3::NrEesmCcT2";
+    else if (errorModel == "eesm-cc-t1")
+        errorModelType = "ns3::NrEesmCcT1";
+    else if (errorModel == "lte-mi")
+        errorModelType = "ns3::NrLteMiErrorModel";
+    g_nrHelper->SetDlErrorModel(errorModelType);
+    g_nrHelper->SetUlErrorModel(errorModelType);
     idealBeamformingHelper->SetAttribute(
         "BeamformingMethod",
         TypeIdValue(TypeId::LookupByName("ns3::DirectPathQuasiOmniBeamforming")));
@@ -834,7 +1156,8 @@ scenarioSetup(std::string flowDirection = "ul",
     g_nrHelper->SetUePhyAttribute("NoiseFigure", DoubleValue(9.0));
 
     // --- RLC UM buffer size (matches legacy LTE setting from original prototype) --- //
-    Config::SetDefault("ns3::NrRlcUm::MaxTxBufferSize", UintegerValue(180000));
+    Config::SetDefault("ns3::NrRlcUm::MaxTxBufferSize", UintegerValue(rlcTxBufferBytes));
+    Config::SetDefault("ns3::NrRlcAm::MaxTxBufferSize", UintegerValue(rlcTxBufferBytes)); // parity for TCP (AM)
 
     // Reduce TCP MinRTO from RFC 6298 default (1s) to Linux standard (200ms)
     // to recover faster from handover-induced packet loss.
@@ -909,6 +1232,12 @@ scenarioSetup(std::string flowDirection = "ul",
     g_uavContainer.Create(1);
 
     // ---- gNB setup: simple vs hexgrid ---------------------------------- //
+        // Trajectory obs support: capture the pre-generated UAV waypoint plan
+        // so the obs-app can lerp exact positions from it (g_uavWaypoints).
+        // WaypointMobilityModel moves at constant velocity between waypoints,
+        // so the plan IS the trajectory.
+        g_uavWaypoints.clear();
+
     if (topology == "hexgrid")
     {
         // Manual hexgrid: 1 ring = 7 sites, 3 sectors each = 21 gNBs
@@ -1009,94 +1338,22 @@ scenarioSetup(std::string flowDirection = "ul",
         // Update config after device installation
         // (NrGnbNetDevice::UpdateConfig is called inside InstallGnbDevice)
 
+
         // ---- UAV mobility (hexgrid) ------------------------------------ //
         BoundingBox bbox = ComputeGnbBoundingBox(g_gnbContainer, intersiteDistance * 0.2);
         double uavCenterY = (bbox.minY + bbox.maxY) / 2.0;
 
-        if (uavMobility == "ascend-random")
-        {
-            // (same as before — UAV waypoint logic unchanged)
-            double dwellTime = 2.0;
-            Ptr<UniformRandomVariable> rbx = CreateObject<UniformRandomVariable>();
-            rbx->SetAttribute("Min", DoubleValue(bbox.minX));
-            rbx->SetAttribute("Max", DoubleValue(bbox.maxX));
-            Ptr<UniformRandomVariable> rby = CreateObject<UniformRandomVariable>();
-            rby->SetAttribute("Min", DoubleValue(bbox.minY));
-            rby->SetAttribute("Max", DoubleValue(bbox.maxY));
-            Ptr<UniformRandomVariable> rbz = CreateObject<UniformRandomVariable>();
-            rbz->SetAttribute("Min", DoubleValue(startHeight));
-            rbz->SetAttribute("Max", DoubleValue(endHeight));
-
-            Vector startPos(rbx->GetValue(), rby->GetValue(), 1.5);
-            Ptr<WaypointMobilityModel> wpMob = CreateObject<WaypointMobilityModel>();
-            g_uavContainer.Get(0)->AggregateObject(wpMob);
-            wpMob->AddWaypoint(Waypoint(Seconds(0.0), startPos));
-            wpMob->AddWaypoint(Waypoint(Seconds(dwellTime), startPos));
-            double ascentTime = (startHeight - 1.5) / ueSpeed;
-            Vector ascentEnd(startPos.x, startPos.y, startHeight);
-            wpMob->AddWaypoint(Waypoint(Seconds(dwellTime + ascentTime), ascentEnd));
-            Vector currentPos = ascentEnd;
-            double currentTime = dwellTime + ascentTime;
-            while (currentTime < simDuration * 2)
-            {
-                Vector nextPos;
-                double dist;
-                do
-                {
-                    nextPos = Vector(rbx->GetValue(), rby->GetValue(), rbz->GetValue());
-                    dist = CalculateDistance(currentPos, nextPos);
-                } while (dist < travelLegMin || dist > travelLegMax);
-                double travelTime = dist / ueSpeed;
-                currentTime += travelTime;
-                wpMob->AddWaypoint(Waypoint(Seconds(currentTime), nextPos));
-                currentPos = nextPos;
-            }
-        }
-        else if (uavMobility == "random-waypoint")
-        {
-            // (same UAV waypoint logic as before)
-            double dwellTime = 2.0;
-            Ptr<UniformRandomVariable> rbx = CreateObject<UniformRandomVariable>();
-            rbx->SetAttribute("Min", DoubleValue(bbox.minX));
-            rbx->SetAttribute("Max", DoubleValue(bbox.maxX));
-            Ptr<UniformRandomVariable> rby = CreateObject<UniformRandomVariable>();
-            rby->SetAttribute("Min", DoubleValue(bbox.minY));
-            rby->SetAttribute("Max", DoubleValue(bbox.maxY));
-            Ptr<UniformRandomVariable> rbz = CreateObject<UniformRandomVariable>();
-            rbz->SetAttribute("Min", DoubleValue(startHeight));
-            rbz->SetAttribute("Max", DoubleValue(endHeight));
-
-            Vector startPos(rbx->GetValue(), rby->GetValue(), startHeight);
-            Ptr<WaypointMobilityModel> wpMob = CreateObject<WaypointMobilityModel>();
-            g_uavContainer.Get(0)->AggregateObject(wpMob);
-            wpMob->AddWaypoint(Waypoint(Seconds(0.0), startPos));
-            wpMob->AddWaypoint(Waypoint(Seconds(dwellTime), startPos));
-            Vector currentPos = startPos;
-            double currentTime = dwellTime;
-            while (currentTime < simDuration * 2)
-            {
-                Vector nextPos;
-                double dist;
-                do
-                {
-                    nextPos = Vector(rbx->GetValue(), rby->GetValue(), rbz->GetValue());
-                    dist = CalculateDistance(currentPos, nextPos);
-                } while (dist < travelLegMin || dist > travelLegMax);
-                double travelTime = dist / ueSpeed;
-                currentTime += travelTime;
-                wpMob->AddWaypoint(Waypoint(Seconds(currentTime), nextPos));
-                currentPos = nextPos;
-            }
-        }
-        else // "constant"
-        {
-            MobilityHelper uavMob;
-            uavMob.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-            uavMob.Install(g_uavContainer);
-            Ptr<ConstantPositionMobilityModel> uavPos =
-                g_uavContainer.Get(0)->GetObject<ConstantPositionMobilityModel>();
-            uavPos->SetPosition(Vector((bbox.minX + bbox.maxX) / 2.0, uavCenterY, startHeight));
-        }
+        InstallUavMobility(g_uavContainer.Get(0),
+                           bbox,
+                           startHeight,
+                           endHeight,
+                           ueSpeed,
+                           simDuration,
+                           travelLegMin,
+                           travelLegMax,
+                           /*randomStart=*/true,
+                           Vector((bbox.minX + bbox.maxX) / 2.0, uavCenterY, startHeight),
+                           uavMobility);
     }
     else if (topology == "triangle")
     {
@@ -1180,88 +1437,17 @@ scenarioSetup(std::string flowDirection = "ul",
         BoundingBox bbox = ComputeGnbBoundingBox(g_gnbContainer, intersiteDistance * 0.2);
         double uavCenterY = (bbox.minY + bbox.maxY) / 2.0;
 
-        if (uavMobility == "ascend-random")
-        {
-            double dwellTime = 2.0;
-            Ptr<UniformRandomVariable> rbx = CreateObject<UniformRandomVariable>();
-            rbx->SetAttribute("Min", DoubleValue(bbox.minX));
-            rbx->SetAttribute("Max", DoubleValue(bbox.maxX));
-            Ptr<UniformRandomVariable> rby = CreateObject<UniformRandomVariable>();
-            rby->SetAttribute("Min", DoubleValue(bbox.minY));
-            rby->SetAttribute("Max", DoubleValue(bbox.maxY));
-            Ptr<UniformRandomVariable> rbz = CreateObject<UniformRandomVariable>();
-            rbz->SetAttribute("Min", DoubleValue(startHeight));
-            rbz->SetAttribute("Max", DoubleValue(endHeight));
-
-            Vector startPos(rbx->GetValue(), rby->GetValue(), 1.5);
-            Ptr<WaypointMobilityModel> wpMob = CreateObject<WaypointMobilityModel>();
-            g_uavContainer.Get(0)->AggregateObject(wpMob);
-            wpMob->AddWaypoint(Waypoint(Seconds(0.0), startPos));
-            wpMob->AddWaypoint(Waypoint(Seconds(dwellTime), startPos));
-            double ascentTime = (startHeight - 1.5) / ueSpeed;
-            Vector ascentEnd(startPos.x, startPos.y, startHeight);
-            wpMob->AddWaypoint(Waypoint(Seconds(dwellTime + ascentTime), ascentEnd));
-            Vector currentPos = ascentEnd;
-            double currentTime = dwellTime + ascentTime;
-            while (currentTime < simDuration * 2)
-            {
-                Vector nextPos;
-                double dist;
-                do
-                {
-                    nextPos = Vector(rbx->GetValue(), rby->GetValue(), rbz->GetValue());
-                    dist = CalculateDistance(currentPos, nextPos);
-                } while (dist < travelLegMin || dist > travelLegMax);
-                double travelTime = dist / ueSpeed;
-                currentTime += travelTime;
-                wpMob->AddWaypoint(Waypoint(Seconds(currentTime), nextPos));
-                currentPos = nextPos;
-            }
-        }
-        else if (uavMobility == "random-waypoint")
-        {
-            double dwellTime = 2.0;
-            Ptr<UniformRandomVariable> rbx = CreateObject<UniformRandomVariable>();
-            rbx->SetAttribute("Min", DoubleValue(bbox.minX));
-            rbx->SetAttribute("Max", DoubleValue(bbox.maxX));
-            Ptr<UniformRandomVariable> rby = CreateObject<UniformRandomVariable>();
-            rby->SetAttribute("Min", DoubleValue(bbox.minY));
-            rby->SetAttribute("Max", DoubleValue(bbox.maxY));
-            Ptr<UniformRandomVariable> rbz = CreateObject<UniformRandomVariable>();
-            rbz->SetAttribute("Min", DoubleValue(startHeight));
-            rbz->SetAttribute("Max", DoubleValue(endHeight));
-
-            Vector startPos(rbx->GetValue(), rby->GetValue(), startHeight);
-            Ptr<WaypointMobilityModel> wpMob = CreateObject<WaypointMobilityModel>();
-            g_uavContainer.Get(0)->AggregateObject(wpMob);
-            wpMob->AddWaypoint(Waypoint(Seconds(0.0), startPos));
-            wpMob->AddWaypoint(Waypoint(Seconds(dwellTime), startPos));
-            Vector currentPos = startPos;
-            double currentTime = dwellTime;
-            while (currentTime < simDuration * 2)
-            {
-                Vector nextPos;
-                double dist;
-                do
-                {
-                    nextPos = Vector(rbx->GetValue(), rby->GetValue(), rbz->GetValue());
-                    dist = CalculateDistance(currentPos, nextPos);
-                } while (dist < travelLegMin || dist > travelLegMax);
-                double travelTime = dist / ueSpeed;
-                currentTime += travelTime;
-                wpMob->AddWaypoint(Waypoint(Seconds(currentTime), nextPos));
-                currentPos = nextPos;
-            }
-        }
-        else // "constant"
-        {
-            MobilityHelper uavMob;
-            uavMob.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-            uavMob.Install(g_uavContainer);
-            Ptr<ConstantPositionMobilityModel> uavPos =
-                g_uavContainer.Get(0)->GetObject<ConstantPositionMobilityModel>();
-            uavPos->SetPosition(Vector((bbox.minX + bbox.maxX) / 2.0, uavCenterY, startHeight));
-        }
+        InstallUavMobility(g_uavContainer.Get(0),
+                           bbox,
+                           startHeight,
+                           endHeight,
+                           ueSpeed,
+                           simDuration,
+                           travelLegMin,
+                           travelLegMax,
+                           /*randomStart=*/true,
+                           Vector((bbox.minX + bbox.maxX) / 2.0, uavCenterY, startHeight),
+                           uavMobility);
     }
     else // "simple"
     {
@@ -1280,104 +1466,21 @@ scenarioSetup(std::string flowDirection = "ul",
         double startX = intersiteDistance * 0.3;
         double uavY = 0.0;
 
-        if (uavMobility == "ascend-random")
-        {
-            BoundingBox bbox = ComputeGnbBoundingBox(g_gnbContainer, intersiteDistance * 0.2);
-            double dwellTime = 2.0;
-            Ptr<UniformRandomVariable> rbx = CreateObject<UniformRandomVariable>();
-            rbx->SetAttribute("Min", DoubleValue(bbox.minX));
-            rbx->SetAttribute("Max", DoubleValue(bbox.maxX));
-            Ptr<UniformRandomVariable> rby = CreateObject<UniformRandomVariable>();
-            rby->SetAttribute("Min", DoubleValue(bbox.minY));
-            rby->SetAttribute("Max", DoubleValue(bbox.maxY));
-            Ptr<UniformRandomVariable> rbz = CreateObject<UniformRandomVariable>();
-            rbz->SetAttribute("Min", DoubleValue(startHeight));
-            rbz->SetAttribute("Max", DoubleValue(endHeight));
+        BoundingBox bbox = ComputeGnbBoundingBox(g_gnbContainer, intersiteDistance * 0.2);
 
-            Vector ground((bbox.minX + bbox.maxX) / 2.0, (bbox.minY + bbox.maxY) / 2.0, 1.5);
-
-            Ptr<WaypointMobilityModel> wpMob = CreateObject<WaypointMobilityModel>();
-            g_uavContainer.Get(0)->AggregateObject(wpMob);
-
-            wpMob->AddWaypoint(Waypoint(Seconds(0.0), ground));
-            wpMob->AddWaypoint(Waypoint(Seconds(dwellTime), ground));
-            double ascentTime = (startHeight - 1.5) / ueSpeed;
-            Vector ascentEnd(ground.x, ground.y, startHeight);
-            wpMob->AddWaypoint(Waypoint(Seconds(dwellTime + ascentTime), ascentEnd));
-
-            Vector currentPos = ascentEnd;
-            double currentTime = dwellTime + ascentTime;
-            while (currentTime < simDuration * 2)
-            {
-                Vector nextPos;
-                double dist;
-                do
-                {
-                    nextPos = Vector(rbx->GetValue(), rby->GetValue(), rbz->GetValue());
-                    dist = CalculateDistance(currentPos, nextPos);
-                } while (dist < travelLegMin || dist > travelLegMax);
-                double travelTime = dist / ueSpeed;
-                currentTime += travelTime;
-                wpMob->AddWaypoint(Waypoint(Seconds(currentTime), nextPos));
-                currentPos = nextPos;
-            }
-        }
-        else if (uavMobility == "random-waypoint")
-        {
-            BoundingBox bbox = ComputeGnbBoundingBox(g_gnbContainer, intersiteDistance * 0.2);
-            double dwellTime = 2.0;
-            Ptr<UniformRandomVariable> rbx = CreateObject<UniformRandomVariable>();
-            rbx->SetAttribute("Min", DoubleValue(bbox.minX));
-            rbx->SetAttribute("Max", DoubleValue(bbox.maxX));
-            Ptr<UniformRandomVariable> rby = CreateObject<UniformRandomVariable>();
-            rby->SetAttribute("Min", DoubleValue(bbox.minY));
-            rby->SetAttribute("Max", DoubleValue(bbox.maxY));
-            Ptr<UniformRandomVariable> rbz = CreateObject<UniformRandomVariable>();
-            rbz->SetAttribute("Min", DoubleValue(startHeight));
-            rbz->SetAttribute("Max", DoubleValue(endHeight));
-
-            Vector startPos((bbox.minX + bbox.maxX) / 2.0,
-                            (bbox.minY + bbox.maxY) / 2.0,
-                            startHeight);
-            Ptr<WaypointMobilityModel> wpMob = CreateObject<WaypointMobilityModel>();
-            g_uavContainer.Get(0)->AggregateObject(wpMob);
-            wpMob->AddWaypoint(Waypoint(Seconds(0.0), startPos));
-            wpMob->AddWaypoint(Waypoint(Seconds(dwellTime), startPos));
-
-            Vector currentPos = startPos;
-            double currentTime = dwellTime;
-            while (currentTime < simDuration * 2) // generate far beyond stop time
-            {
-                Vector nextPos;
-                double dist;
-                do
-                {
-                    nextPos = Vector(rbx->GetValue(), rby->GetValue(), rbz->GetValue());
-                    dist = CalculateDistance(currentPos, nextPos);
-                } while (dist < travelLegMin || dist > travelLegMax);
-                double travelTime = dist / ueSpeed;
-                currentTime += travelTime;
-                wpMob->AddWaypoint(Waypoint(Seconds(currentTime), nextPos));
-                currentPos = nextPos;
-            }
-
-            std::cout << "Random waypoint path: bounding box X=[" << bbox.minX << ", " << bbox.maxX
-                      << "], Y=[" << bbox.minY << ", " << bbox.maxY << "], Z=[" << startHeight
-                      << ", " << endHeight << "], speed=" << ueSpeed << " m/s" << std::endl;
-        }
-        else // "constant"
-        {
-            MobilityHelper uavMob;
-            uavMob.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-            uavMob.Install(g_uavContainer);
-            Ptr<ConstantPositionMobilityModel> uavPos =
-                g_uavContainer.Get(0)->GetObject<ConstantPositionMobilityModel>();
-            uavPos->SetPosition(Vector(startX, uavY, startHeight));
-        }
+        InstallUavMobility(g_uavContainer.Get(0),
+                           bbox,
+                           startHeight,
+                           endHeight,
+                           ueSpeed,
+                           simDuration,
+                           travelLegMin,
+                           travelLegMax,
+                           /*randomStart=*/false,
+                           Vector(startX, uavY, startHeight),
+                           uavMobility);
     }
 
-    Config::SetDefault("ns3::NrGnbPhy::TxPower", DoubleValue(46.0));
-    Config::SetDefault("ns3::NrUePhy::TxPower", DoubleValue(23.0));
 
     if (topology == "simple")
     {
@@ -1397,7 +1500,7 @@ scenarioSetup(std::string flowDirection = "ul",
     // UDP: RLC UM (default, no link-layer retransmission needed)
     {
         NrGnbRrc::NrQosFlowToRlcMapping_t rlcMode =
-            (transportProtocol == "tcp") ? NrGnbRrc::RLC_UM_ALWAYS : NrGnbRrc::RLC_UM_ALWAYS;
+            (transportProtocol == "tcp") ? NrGnbRrc::RLC_AM_ALWAYS : NrGnbRrc::RLC_UM_ALWAYS;
         for (uint32_t i = 0; i < g_gnbContainer.GetN(); ++i)
         {
             Ptr<NrGnbNetDevice> gnbDev =
@@ -1420,7 +1523,17 @@ scenarioSetup(std::string flowDirection = "ul",
         g_nrEpcHelper->AssignUeIpv4Address(NetDeviceContainer(g_uavNrDevs));
     if (topology == "hexgrid" || topology == "triangle")
     {
-        g_nrHelper->AttachToMaxRsrpGnb(g_uavNrDevs, g_gnbNrDevs);
+        if (channelModel == "tworay")
+        {
+            // AttachToMaxRsrpGnb requires the ThreeGpp phased-array channel
+            // (NrInitialAssociation::ExtractUeParameters derefs it); the
+            // two-ray model has none — attach by distance instead.
+            g_nrHelper->AttachToClosestGnb(g_uavNrDevs, g_gnbNrDevs);
+        }
+        else
+        {
+            g_nrHelper->AttachToMaxRsrpGnb(g_uavNrDevs, g_gnbNrDevs);
+        }
     }
     else
     {
@@ -1463,11 +1576,19 @@ scenarioSetup(std::string flowDirection = "ul",
 
         g_interferingUeContainer.Create(addInterferingUes);
 
-        // Seed-deterministic: each interfering UE gets its own RNG stream offset
-        // (global seed already set at top of scenarioSetup)
+        // Interference-regime isolation (2026-08-12): pin the interferer RNGs
+        // so their trajectories depend only on (seed, runId, UE index) — the
+        // same fix as the UAV's SetStream(100-102). Unpinned RNGs draw from the
+        // shared auto-assigned stream, so upstream consumption-order shifts
+        // (e.g. rlMode on/off between A3 baselines and RL evals) would silently
+        // move the interferers. Stream 110 = start positions (prefix-stable:
+        // adding interferers extends the draw sequence without moving UE 0..N-1);
+        // 111+2i / 112+2i = per-UE waypoint RNGs (each UE's plan independent of
+        // the total interferer count).
         Ptr<UniformRandomVariable> interferingUeRng = CreateObject<UniformRandomVariable>();
         interferingUeRng->SetAttribute("Min", DoubleValue(0.0));
         interferingUeRng->SetAttribute("Max", DoubleValue(1.0));
+        interferingUeRng->SetStream(110);
 
         for (uint32_t i = 0; i < addInterferingUes; ++i)
         {
@@ -1494,6 +1615,8 @@ scenarioSetup(std::string flowDirection = "ul",
                 Ptr<UniformRandomVariable> wpRngY = CreateObject<UniformRandomVariable>();
                 wpRngY->SetAttribute("Min", DoubleValue(bbox.minY));
                 wpRngY->SetAttribute("Max", DoubleValue(bbox.maxY));
+                wpRng->SetStream(111 + 2 * i);
+                wpRngY->SetStream(112 + 2 * i);
                 while (currentTime < simDuration * 2)
                 {
                     Vector nextPos;
@@ -1614,9 +1737,11 @@ scenarioSetup(std::string flowDirection = "ul",
     PacketSinkHelper packetSinkHelper(socketFactory, sinkAddress);
     auto sinkApp = packetSinkHelper.Install(sinkNode);
 
-    // OnOff data rate (Mbps) — the traffic cap. Single source of truth for the
-    // OnOff applications (both TCP and UDP branches).
-    const double onOffDataRateMbps = 100.0;
+    // OnOff data rate (Mbps) — the traffic cap (CLI --trafficRateMbps). Single
+    // source of truth for the OnOff applications (both TCP and UDP branches).
+    // Above the link capacity this acts as full-buffer (goodput = link); below
+    // it, the rate becomes the ceiling and idle slots appear (cheaper runtime).
+    const double onOffDataRateMbps = trafficRateMbps;
     const double onOffDataRateBps = onOffDataRateMbps * 1e6;
 
     // Reward/obs goodput reference (Mbps) — SEPARATE from the traffic rate.
@@ -1664,7 +1789,7 @@ scenarioSetup(std::string flowDirection = "ul",
             auto ipv4 = uav->GetObject<Ipv4>();
             std::cout << "DEBUG t=" << Simulator::Now().GetSeconds()
                       << " rrcState=" << rrc->GetState() << " cellId=" << rrc->GetCellId()
-                      << " ueIp=" << ipv4->GetAddress(1, 0).GetLocal() << std::endl;
+                      << " ueIp=" << ipv4->GetAddress(1, 0).GetLocal() << "\n";
         });
 
         // Schedule metric-accumulating traces (always connected, regardless of logging)
@@ -1740,7 +1865,7 @@ scenarioSetup(std::string flowDirection = "ul",
             auto ipv4 = uav->GetObject<Ipv4>();
             std::cout << "DEBUG t=" << Simulator::Now().GetSeconds()
                       << " rrcState=" << rrc->GetState() << " cellId=" << rrc->GetCellId()
-                      << " ueIp=" << ipv4->GetAddress(1, 0).GetLocal() << std::endl;
+                      << " ueIp=" << ipv4->GetAddress(1, 0).GetLocal() << "\n";
         });
 
         // UDP: only SinkRx trace for throughput
@@ -1783,7 +1908,10 @@ scenarioSetup(std::string flowDirection = "ul",
         {
             uint16_t gnbCellId = g_gnbNrDevs.Get(i)->GetObject<NrGnbNetDevice>()->GetCellId();
             phy->TraceConnectWithoutContext("UlSinrTrace",
+                                            MakeBoundCallback(&CaptureUlSrsSinr, gnbCellId));
+            phy->TraceConnectWithoutContext("UlSinrTrace",
                                             MakeBoundCallback(&UlSrsSinrLogger, gnbCellId));
+            phy->TraceConnectWithoutContext("SlotDataStats", MakeCallback(&CaptureSlotDataStats));
             phy->TraceConnectWithoutContext("SlotDataStats", MakeCallback(&SlotDataStatsLogger));
             phy->TraceConnectWithoutContext("UlHarqFeedbackTrace",
                                             MakeCallback(&UlHarqFeedbackLogger));
@@ -1820,6 +1948,14 @@ scenarioSetup(std::string flowDirection = "ul",
                                                   MakeCallback(&ReportUeTxPower));
             uePhy->TraceConnectWithoutContext("UePhyTxedHarqFeedbackTrace",
                                               MakeCallback(&HarqFeedbackLogger));
+            // DL per-TB RX trace (RxPacketTraceUe) — DL mirror of the UL
+            // nr-rl-ul-rx-sinr.csv (2026-08-13)
+            Ptr<NrSpectrumPhy> ueSpectrumPhy = uePhy->GetSpectrumPhy();
+            if (ueSpectrumPhy)
+            {
+                ueSpectrumPhy->TraceConnectWithoutContext("RxPacketTraceUe",
+                                                          MakeCallback(&DlRxPacketLogger));
+            }
         }
     });
 
@@ -1840,6 +1976,8 @@ scenarioSetup(std::string flowDirection = "ul",
         uint32_t uavNodeId = g_uavContainer.Get(0)->GetId();
         g_lastRsrpValues.resize(numBs + 1, -140.0); // index by cellId (1-based), dBm
         g_lastSinrValues.resize(numBs + 1, -40.0);  // index by cellId (1-based), -40dB = unknown
+        g_ulSinrSum.assign(numBs + 1, 0.0);
+        g_ulSinrCount.assign(numBs + 1, 0);
         g_lastRsrqValues.resize(numBs + 1, -20.0);  // index by cellId (1-based), dB
 
         RlApplicationHelper rlAppHelper(NrRlHandoverRewardApp::GetTypeId());
@@ -1849,6 +1987,7 @@ scenarioSetup(std::string flowDirection = "ul",
         rlAppHelper.SetAttribute("BetaGoodput", DoubleValue(rlBetaGoodput));
         rlAppHelper.SetAttribute("BetaHandover", DoubleValue(rlBetaHandover));
         rlAppHelper.SetAttribute("PingPongBetaMultiplier", DoubleValue(rlPingPongMultiplier));
+        rlAppHelper.SetAttribute("HandoverHangoverLength", UintegerValue(rlHandoverHangoverLength));
         rlAppHelper.SetAttribute("HandoverRatePenaltyEnabled", BooleanValue(rlHandoverRatePenalty));
         rlAppHelper.SetAttribute("HandoverRateWindowMs", UintegerValue(rlHandoverRateWindowMs));
         rlAppHelper.SetAttribute("HandoverRateBudget", UintegerValue(rlHandoverRateBudget));
@@ -1864,28 +2003,21 @@ scenarioSetup(std::string flowDirection = "ul",
         rlAppHelper.SetTypeId(NrRlHandoverAgentApp::GetTypeId());
         rlAppHelper.SetAttribute("StartTime", TimeValue(Seconds(1.0)));
         rlAppHelper.SetAttribute("NumBs", UintegerValue(numBs));
-        rlAppHelper.SetAttribute("TopN", UintegerValue(rlTopN)); // action space: Discrete(rlTopN+1)
         auto agentApps = rlAppHelper.Install(g_uavContainer.Get(0));
 
         rlAppHelper.SetTypeId(NrRlHandoverObservationApp::GetTypeId());
         rlAppHelper.SetAttribute("StartTime", TimeValue(Seconds(1.0)));
         rlAppHelper.SetAttribute("NumBs", UintegerValue(numBs));
-        // Obs ranks a fixed 5 slots (more context than the action space).
-        rlAppHelper.SetAttribute("TopN", UintegerValue(5));
         rlAppHelper.SetAttribute("UavNodeId", UintegerValue(uavNodeId));
         rlAppHelper.SetAttribute("StepTimeMs", UintegerValue(stepTime));
-        rlAppHelper.SetAttribute("SinrEwmaAlpha", DoubleValue(0.1));
         rlAppHelper.SetAttribute("GoodputRefBps", DoubleValue(rewardRefBps));
-        rlAppHelper.SetAttribute("UseTbsObservation", BooleanValue(useTbsObservation));
         rlAppHelper.SetAttribute("HandoverRateWindowMs", UintegerValue(rlHandoverRateWindowMs));
         auto obsApps = rlAppHelper.Install(g_uavContainer.Get(0));
 
         rlAppHelper.SetTypeId(NrRlHandoverActionApp::GetTypeId());
         rlAppHelper.SetAttribute("StartTime", TimeValue(Seconds(1.0)));
         rlAppHelper.SetAttribute("NumBs", UintegerValue(numBs));
-        rlAppHelper.SetAttribute("TopN", UintegerValue(rlTopN));
         rlAppHelper.SetAttribute("HandoverAlgorithm", StringValue(handoverAlgorithm));
-        rlAppHelper.SetAttribute("HandoverDebounceMs", UintegerValue(rlHandoverDebounceMs));
         auto actApps = rlAppHelper.Install(g_uavContainer.Get(0));
 
         CommunicationHelper commHelper;

@@ -76,7 +76,7 @@ ENV_NAME = "defiance-nr-rl-handover"
 # values for most of these).
 _TRAINING_ONLY_KEYS = frozenset({
     "parallel", "seed", "runId", "trial_name", "outputDir", "logging",
-    "rlMode", "handoverAlgorithm", "useActionMasking",
+    "rlMode", "handoverAlgorithm",
     "visualize", "statsDir",
 })
 
@@ -87,10 +87,10 @@ _TRAINING_ONLY_KEYS = frozenset({
 # excluded: build_infer_cmd() force-sets them to true/agent for the eval.)
 _REWARD_ENV_KEYS = frozenset({
     "rlRewardComposition", "rlBetaHandover", "rlAlphaGoodput",
-    "rlBetaGoodput", "useTbsObservation", "stepTime", "handoverMargin",
+    "rlBetaGoodput", "stepTime", "handoverMargin",
     "rlPingPongMultiplier", "rlHandoverRatePenalty", "rlHandoverRateWindowMs",
-    "rlHandoverRateBudget", "rlHandoverRateLambda", "rlTopN",
-    "rlHandoverDebounceMs", "rlRewardRefMbps", "rlRewardGoodputShape",
+    "rlHandoverRateBudget", "rlHandoverRateLambda",
+    "rlRewardRefMbps", "rlRewardGoodputShape",
     "rlRewardGoodputAlpha", "rlRewardGoodputP",
 })
 
@@ -242,7 +242,7 @@ def parse_reward(path: Path, sim_time: float) -> dict:
     """
     if not path.exists():
         return {}
-    df = pd.read_csv(path, header=None)
+    df = pd.read_csv(path, )
     df.columns = ["t", "goodput", "ref", "min", "normG_raw", "normG",
                   "R_G", "I_ho", "R_H", "pingPong", "reward"][:df.shape[1]]
     if len(df) == 0:
@@ -261,7 +261,7 @@ def parse_actions(path: Path) -> dict:
     """Parse rl_actions_full.csv (time,actionIndex,targetCellId,currentCellId,outcome)."""
     if not path.exists():
         return {}
-    df = pd.read_csv(path, header=None,
+    df = pd.read_csv(path, skiprows=1, header=None,
                      names=["t", "a", "target", "current", "outcome"])
     if len(df) == 0:
         return {}
@@ -271,25 +271,28 @@ def parse_actions(path: Path) -> dict:
         "actions_executed": int(out.get("executed", 0)),
         "actions_blocked_same_cell": int(out.get("blocked-same-cell", 0)),
         "actions_blocked_in_progress": int(out.get("blocked-in-progress", 0)),
-        "actions_blocked_debounce": int(out.get("blocked-debounce", 0)),
+
         "actions_noop": int(out.get("noop", 0)),
         "action_dist": {int(k): int(v) for k, v in dist.items()},
     }
 
 
 def parse_dl_sinr(path: Path) -> np.ndarray:
-    """dl_sinr.csv: time,cellId,rnti,sinrDb (serving cell only)."""
+    """SINR CSV: dl_sinr.csv (DL data, 4 cols) or ul_sinr_srs.csv (UL SRS,
+    3 cols — no RNTI). SINR is always the LAST column; positional read avoids
+    the NaN schema mismatch of a fixed 4-column header on the 3-column UL file
+    (2026-08-13)."""
     if not path.exists():
         return np.array([])
-    df = pd.read_csv(path, header=None, names=["time", "cellId", "rnti", "sinrDb"])
-    return df["sinrDb"].to_numpy()
+    df = pd.read_csv(path, )
+    return df.iloc[:, -1].to_numpy()
 
 
 def parse_handovers(path: Path) -> tuple:
     """nr-rl-handovers.csv: time,cellId -> (count, times, cells)."""
     if not path.exists():
         return 0, np.array([]), np.array([])
-    df = pd.read_csv(path, header=None, names=["time", "cellId"])
+    df = pd.read_csv(path, skiprows=1, header=None, names=["time", "cellId"])
     return len(df), df["time"].to_numpy(), df["cellId"].to_numpy()
 
 
@@ -351,12 +354,14 @@ UNIT_MAP = {
     "pingpong_steps": "steps",
     "rlfCount": "count",
     "rttMs_avg": "ms",
-    "sinrDb_avg": "dB",
-    "sinrDb_p50": "dB",
+    "dlSinrDb_avg": "dB",
+    "dlSinrDb_p50": "dB",
+    "ulSinrDb_avg": "dB",
+    "ulSinrDb_p50": "dB",
     "actions_executed": "count",
     "actions_blocked_same_cell": "count",
     "actions_blocked_in_progress": "count",
-    "actions_blocked_debounce": "count",
+
     "actions_noop": "count",
     "steps": "count",
     "simTime": "s",
@@ -366,9 +371,10 @@ RAW_FIELDS = [
     "seed", "goodputMbps", "goodputMbps_obs_mean", "reward_total", "reward_mean",
     "handovers", "handovers_completed", "handover_steps",
     "pingPongCount", "pingpong_steps",
-    "rlfCount", "rttMs_avg", "sinrDb_avg", "sinrDb_p50",
+    "rlfCount", "rttMs_avg",
+    "dlSinrDb_avg", "dlSinrDb_p50", "ulSinrDb_avg", "ulSinrDb_p50",
     "actions_executed", "actions_blocked_same_cell", "actions_blocked_in_progress",
-    "actions_blocked_debounce",
+
     "actions_noop", "steps", "simTime",
 ]
 
@@ -377,8 +383,12 @@ def write_raw_csv(path: Path, rows: list):
     if not rows:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Keep only the fields present in this scenario's rows: the SINR keys are
+    # direction-specific (dlSinrDb_* xor ulSinrDb_*), so each raw.csv carries
+    # exactly the columns that apply (2026-08-13).
+    fieldnames = [k for k in RAW_FIELDS if k in rows[0]]
     with open(path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=RAW_FIELDS, extrasaction="ignore")
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
@@ -391,7 +401,8 @@ def write_aggregate_csv(path: Path, aggregate: dict):
         writer = csv.writer(f)
         writer.writerow(["metric", "mean", "std", "p5", "p50", "p95", "unit"])
         for metric, stats in sorted(aggregate.items()):
-            unit = UNIT_MAP.get(metric, "")
+            # metric keys carry an _avg/_p50 suffix; look up the base name
+            unit = UNIT_MAP.get(metric.rsplit("_", 1)[0], "")
             writer.writerow([
                 metric,
                 f"{stats['mean']:.4f}", f"{stats['std']:.4f}",
@@ -431,7 +442,9 @@ def run_one_seed(scenario, common, checkpoint, seed, tag_dir, sim_time,
     out = parse_stdout(proc.stdout)
     rew = parse_reward(seed_dir / "rl_reward.csv", sim_time)
     act = parse_actions(seed_dir / "rl_actions_full.csv")
-    sinr = parse_dl_sinr(seed_dir / "dl_sinr.csv")
+    flow = common.get("flowDirection", "dl")
+    sinr_csv = "ul_sinr_srs.csv" if flow == "ul" else "dl_sinr.csv"
+    sinr = parse_dl_sinr(seed_dir / sinr_csv)
     # Handover metrics. In RL mode `g_totalHandovers` (stdout) counts act-app
     # handover REQUESTS; nr-rl-handovers.csv counts COMPLETIONS (HandoverEndOk),
     # which can be 0 when the policy re-triggers before/without the procedure
@@ -455,12 +468,15 @@ def run_one_seed(scenario, common, checkpoint, seed, tag_dir, sim_time,
         "pingpong_steps": rew.get("pingpong_steps", 0),
         "rlfCount": out.get("rlfCount", 0),
         "rttMs_avg": round(out.get("rttMs_stdout", 0.0), 2),
-        "sinrDb_avg": round(float(np.mean(sinr)), 2) if sinr.size else 0.0,
-        "sinrDb_p50": round(float(np.median(sinr)), 2) if sinr.size else 0.0,
+        # Direction-specific SINR keys (dlSinrDb_* = UE DL data SINR for dl
+        # flows, ulSinrDb_* = gNB RB-averaged UL SINR for ul flows) — the old
+        # bare "sinrDb" was ambiguous (2026-08-13).
+        f"{flow}SinrDb_avg": round(float(np.mean(sinr)), 2) if sinr.size else 0.0,
+        f"{flow}SinrDb_p50": round(float(np.median(sinr)), 2) if sinr.size else 0.0,
         "actions_executed": act.get("actions_executed", 0),
         "actions_blocked_same_cell": act.get("actions_blocked_same_cell", 0),
         "actions_blocked_in_progress": act.get("actions_blocked_in_progress", 0),
-        "actions_blocked_debounce": act.get("actions_blocked_debounce", 0),
+
         "actions_noop": act.get("actions_noop", 0),
         "steps": rew.get("steps", 0),
         "simTime": round(out.get("simTime", 0.0), 4),

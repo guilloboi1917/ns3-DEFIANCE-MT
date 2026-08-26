@@ -163,16 +163,16 @@ def main(argv=None):
         print(f"CWND data file not found: {CWND_FILE}")
         print("Some TCP-specific plots will be empty (expected for UDP runs).")
 
-    harq = pd.read_csv(HARQ_FILE, header=None,
+    harq = pd.read_csv(HARQ_FILE, skiprows=1, header=None,
                        names=["time", "cellId", "rnti", "bwpId", "harqId", "k1Delay"]) \
         if os.path.exists(HARQ_FILE) else None
 
-    slot_stats = pd.read_csv(SLOT_STATS_FILE, header=None,
+    slot_stats = pd.read_csv(SLOT_STATS_FILE, skiprows=1, header=None,
                              names=["time", "cellId", "scheduledUe", "usedReg",
                                     "usedSym", "availableRb", "availableSym", "utilPct"]) \
         if os.path.exists(SLOT_STATS_FILE) else None
 
-    cwnd = pd.read_csv(CWND_FILE, header=None, names=["time", "cwnd"])
+    cwnd = pd.read_csv(CWND_FILE, skiprows=1, header=None, names=["time", "cwnd"])
     # Multiple CWND updates can happen at the same timestamp (burst of ACKs).
     # Keep only the last value per timestamp to avoid vertical line artifacts.
     # Filter out any values larger than uint32 max (shouldn't happen, but just in case of logging bugs).
@@ -180,72 +180,75 @@ def main(argv=None):
     cwnd = cwnd[cwnd["cwnd"] <= 4 * 1024 * 1024]
     cwnd = cwnd.drop_duplicates(subset="time", keep="last").sort_values("time")
 
-    ho = pd.read_csv(HO_FILE, header=None, names=["time", "cellId"]) \
+    ho = pd.read_csv(HO_FILE, skiprows=1, header=None, names=["time", "cellId"]) \
         if os.path.exists(HO_FILE) else None
 
-    rtt = pd.read_csv(RTT_FILE, header=None, names=["time", "rtt"]) \
+    rtt = pd.read_csv(RTT_FILE, skiprows=1, header=None, names=["time", "rtt"]) \
         if os.path.exists(RTT_FILE) else None
 
     rtt = rtt.drop_duplicates(subset="time", keep="last").sort_values("time")
 
-    cwnd_gain = pd.read_csv(CWND_GAIN_FILE, header=None, names=["time", "cwnd_gain"]) \
+    cwnd_gain = pd.read_csv(CWND_GAIN_FILE, skiprows=1, header=None, names=["time", "cwnd_gain"]) \
         if os.path.exists(CWND_GAIN_FILE) else None
 
-    pacing_gain = pd.read_csv(PACING_FILE, header=None, names=["time", "pacing_gain"]) \
+    pacing_gain = pd.read_csv(PACING_FILE, skiprows=1, header=None, names=["time", "pacing_gain"]) \
         if os.path.exists(PACING_FILE) else None
 
     pacing_gain = pacing_gain.drop_duplicates(
         subset="time", keep="last").sort_values("time")
 
-    delivery_rate = delivery_rate = pd.read_csv(DELIVERY_RATE_FILE, header=None, names=["time", "rate"]) \
+    delivery_rate = delivery_rate = pd.read_csv(DELIVERY_RATE_FILE, skiprows=1, header=None, names=["time", "rate"]) \
         if os.path.exists(DELIVERY_RATE_FILE) else None
 
     delivery_rate = delivery_rate.drop_duplicates(
         subset="time", keep="last").sort_values("time")
 
-    rsrp_rsrq_full = pd.read_csv(RSRP_RSRQ_200ms, header=None,
+    rsrp_rsrq_full = pd.read_csv(RSRP_RSRQ_200ms, skiprows=1, header=None,
                                  names=["time", "cellId", "rnti", "rsrp", "rsrq", "isServingCell"]) \
         if os.path.exists(RSRP_RSRQ_200ms) else None
     rsrp_rsrq = rsrp_rsrq_full[rsrp_rsrq_full["isServingCell"] == 1].copy() \
         if rsrp_rsrq_full is not None and not rsrp_rsrq_full.empty else None
 
-    ul_sinr_srs = pd.read_csv(UL_SINR_SRS_FILE, header=None, names=["time", "cellId", "sinr"]) \
+    ul_sinr_srs = pd.read_csv(UL_SINR_SRS_FILE, skiprows=1, header=None, names=["time", "cellId", "sinr"]) \
         if os.path.exists(UL_SINR_SRS_FILE) else None
 
     # ── UL scheduling data (MCS, TBS per slot) ──
     UL_SCHED_FILE = data_dir + '/nr-rl-ul-sched.csv'
-    ul_sched = pd.read_csv(UL_SCHED_FILE, header=None,
+    ul_sched = pd.read_csv(UL_SCHED_FILE, skiprows=1, header=None,
                            names=["time", "cellId", "rnti", "mcs", "tbSize", "symStart", "numSym"]) \
         if os.path.exists(UL_SCHED_FILE) else None
 
-    dl_sinr = pd.read_csv(DL_SINR_FILE, header=None, names=["time", "cellId", "rnti", "sinr"]) \
+    dl_sinr = pd.read_csv(DL_SINR_FILE, skiprows=1, header=None, names=["time", "cellId", "rnti", "sinr"]) \
         if os.path.exists(DL_SINR_FILE) else None
 
-    tx_power = pd.read_csv(TX_POWER_FILE, header=None,
+    tx_power = pd.read_csv(TX_POWER_FILE, skiprows=1, header=None,
                            names=["time", "cellId", "rnti", "txPowerDbm"]) \
         if os.path.exists(TX_POWER_FILE) else None
 
     # ── DL scheduling data (replaces mcs.csv) ──
     DL_SCHED_FILE = data_dir + '/nr-rl-dl-sched.csv'
-    dl_sched = pd.read_csv(DL_SCHED_FILE, header=None,
+    dl_sched = pd.read_csv(DL_SCHED_FILE, skiprows=1, header=None,
                            names=["time", "cellId", "rnti", "mcs", "tbSize", "symStart", "numSym"]) \
         if os.path.exists(DL_SCHED_FILE) else None
 
-    # ── New data: rl_reward (EWMA reward components) ──
-    rsrp_sinr = pd.read_csv(RSRP_SINR_FILE, header=None, names=["time", "cellId", "rnti", "rsrp", "sinrDb"]) \
+    # ── rl_reward (multiplicative R_G x R_H reward components) ──
+    rsrp_sinr = pd.read_csv(RSRP_SINR_FILE, skiprows=1, header=None, names=["time", "cellId", "rnti", "rsrp", "sinrDb"]) \
         if os.path.exists(RSRP_SINR_FILE) else None
 
-    rl_reward = pd.read_csv(REWARD_FILE, header=None, names=["time", "goodput_mbps", "dynRef_mbps", "dynMin_mbps", "normGoodput", "rtt_ms", "rttPenalty", "tcpPenalty", "rlfTerm", "tbsBonus", "handoverPenalty", "rsrpDeltaBonus", "reward"]) \
+    rl_reward = pd.read_csv(REWARD_FILE, skiprows=1, header=None,
+                            names=["time", "goodput_mbps", "dynRef_mbps", "dynMin_mbps",
+                                   "normGoodputRaw", "normGoodput", "rg", "iHo", "rH",
+                                   "pingPong", "reward"]) \
         if os.path.exists(REWARD_FILE) else None
 
     # ── New data: retransmissions, sink (goodput), source (throughput) ──
-    retrans = pd.read_csv(RETRANS_FILE, header=None, names=["time", "size"]) \
+    retrans = pd.read_csv(RETRANS_FILE, skiprows=1, header=None, names=["time", "size"]) \
         if os.path.exists(RETRANS_FILE) else None
 
-    sink = pd.read_csv(SINK_FILE, header=None, names=["time", "size"]) \
+    sink = pd.read_csv(SINK_FILE, skiprows=1, header=None, names=["time", "size"]) \
         if os.path.exists(SINK_FILE) else None
 
-    source = pd.read_csv(SOURCE_FILE, header=None, names=["time", "size"]) \
+    source = pd.read_csv(SOURCE_FILE, skiprows=1, header=None, names=["time", "size"]) \
         if os.path.exists(SOURCE_FILE) else None
 
     # ── 6x2 layout (was 7x2, removed per-cell RB utilization) ──────────
@@ -361,7 +364,7 @@ def main(argv=None):
                                          delivery_rate["rate"].values / 1e6, 0.2)
         ax4.step(t_dr, y_dr, linewidth=1.0, color="tab:red", where="post")
         ax4.set_ylabel("Delivery Rate (Mbps)")
-        ax4.set_title("Delivery Rate, UL MCS, and PHY Throughput")
+        ax4.set_title("Delivery Rate, UL/DL MCS, and PHY Throughput")
         ax4.grid(True)
     if dl_sched is not None and not dl_sched.empty:
         # DL PHY throughput from scheduling, tracked to the UAV via its
@@ -374,6 +377,12 @@ def main(argv=None):
                 window=100, min_periods=1).mean()
             ax4.step(dl_tbs_main["time"], dl_tbs_main["rate_avg"], linewidth=0.8, color="tab:orange",
                      label="DL PHY rate (100slots avg Mbps)", alpha=0.9)
+            # DL MCS on the same MCS axis as the UL MCS (green dashed)
+            dl_mcs_smooth = dl_tbs_main["mcs"].rolling(
+                window=100, min_periods=1).mean()
+            ax4b.step(dl_tbs_main["time"], dl_mcs_smooth, linewidth=1.0,
+                      color="tab:green", where="post",
+                      label="DL MCS (100slots avg)")
     if ul_sched is not None and not ul_sched.empty:
         # Filter to the UAV (RNTI changes on handover) and smooth UL MCS
         uav_mask_ul = _uav_rnti_mask(ul_sched, rsrp_rsrq_full)
@@ -383,7 +392,7 @@ def main(argv=None):
                 window=100, min_periods=1).mean()
             ax4b.step(ul_mcs_main["time"], ul_mcs_smooth, linewidth=1.0,
                       color="tab:blue", where="post", label="UL MCS (100slots avg)")
-            ax4b.set_ylabel("UL MCS index")
+            ax4b.set_ylabel("MCS index (UL blue / DL green)")
             ax4b.set_ylim(-1, 29)
         # Also show UL PHY throughput (TBS-based)
         ul_tbs_main = ul_sched[uav_mask_ul].copy()
@@ -485,34 +494,39 @@ def main(argv=None):
         ax7b.legend(fontsize=6, loc="upper right")
 
     # ═══════════════════════════════════════════════════════════════════
-    # (4,2) Reward Components (EWMA-based adaptive reward)
+    # (4,2) Reward Components (multiplicative R_G x R_H)
     # ═══════════════════════════════════════════════════════════════════
     if rl_reward is not None and not rl_reward.empty:
         t = rl_reward["time"]
 
-        # Goodput (from sink) vs dynamicRef/dynamicMin
+        # Goodput vs the reward reference. The campaign uses the FIXED
+        # rlRewardRefMbps (the EWMA-adaptive ref is an optional legacy
+        # reward-app flag, off by default), so dynRef/dynMin plot the fixed
+        # reference and floor.
         ax8.plot(t, rl_reward["goodput_mbps"], linewidth=1.0, color="tab:purple",
                  label="Goodput (sink Mbps)")
         ax8.plot(t, rl_reward["dynRef_mbps"], linewidth=0.8, color="tab:green",
-                 linestyle="--", label="dynRef (EWMA x 1.1)")
+                 linestyle="--", label="reward ref (rlRewardRefMbps)")
         ax8.plot(t, rl_reward["dynMin_mbps"], linewidth=0.8, color="tab:olive",
-                 linestyle=":", label="dynMin (EWMA x 0.3)")
+                 linestyle=":", label="reward min")
 
-        # Compute and plot EWMA goodput (for reference)
+        # Plot-side EWMA of the goodput (visual smoothing only)
         ewma = rl_reward["goodput_mbps"].ewm(alpha=0.2).mean()
         ax8.plot(t, ewma, linewidth=0.8, color="tab:orange",
-                 linestyle="--", alpha=0.7, label="Goodput EWMA (alpha=0.2)")
+                 linestyle="--", alpha=0.7, label="Goodput EWMA (plot, alpha=0.2)")
 
         ax8.set_ylabel("Throughput (Mbps)")
-        ax8.set_title("Reward Components: Goodput, EWMA Ref, TBS Bonus")
+        ax8.set_title("Reward Components (multiplicative R_G x R_H)")
         ax8.grid(True)
 
-        # Twin axis for normalized reward values
+        # Twin axis for the reward terms
         ax8b = ax8.twinx()
         ax8b.plot(t, rl_reward["normGoodput"], linewidth=0.8, color="tab:blue",
                   linestyle="--", alpha=0.6, label="normGoodput")
-        ax8b.plot(t, rl_reward["tbsBonus"], linewidth=0.8, color="tab:cyan",
-                  linestyle="--", alpha=0.6, label="TBS bonus")
+        ax8b.plot(t, rl_reward["rg"], linewidth=0.8, color="tab:cyan",
+                  linestyle="--", alpha=0.6, label="R_G (goodput term)")
+        ax8b.plot(t, rl_reward["rH"], linewidth=0.8, color="tab:orange",
+                  linestyle=":", alpha=0.6, label="R_H (handover term)")
         ax8b.plot(t, rl_reward["reward"], linewidth=1.2, color="tab:red",
                   label="Reward (total)")
         ax8b.axhline(y=0, color="gray", linestyle=":",

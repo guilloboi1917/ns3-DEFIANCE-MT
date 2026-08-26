@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """Permutation feature importance for a trained handover policy.
 
-Measures how much each of the 29 observation dimensions influences the policy's
+Measures how much each observation dimension influences the policy's
 action choice. For each feature, the column is randomly shuffled across the
-batch and the mean absolute action change (|perturbed_actions - ref_actions|)
-is recorded. Features the policy relies on show high importance; unused
+batch and the ACTION CHANGE RATE (fraction of argmax actions that flip,
+mean(perturbed_actions != ref_actions)) is recorded. The change rate is used
+rather than the mean absolute action-index shift: the Discrete(N) index has no
+ordinal meaning for handovers (stay<->handover is more significant than
+switching handover targets), so a binary flip measure is the defensible one
+(2026-08-11). Features the policy relies on show high importance; unused
 features show ~0.
 
 Requires:
   - An old-API-stack policy checkpoint (SAC/DQN/D3QN): either an experiment
     dir under ~/ray_results with best_checkpoint/, or a direct checkpoint dir.
-  - An observation CSV (rl_obs.csv) with columns: time, obs[0..29].
+  - An observation CSV (rl_obs.csv) with columns: time, obs[0..N].
     Produced by the obs app when --logging=true.
 
 Usage:
@@ -36,13 +40,20 @@ import pandas as pd
 # 30-dim Top-N observation layout — must match BuildObservation() in
 # nr-rl-handover-obs-app.cc
 FEATURE_NAMES = [
+    # Final obs layout (32 dims, freeze 2026-08-13), see NR-RL-DESIGN.md §3.
     "serving_rsrp", "serving_rsrq",
-    "slot_rsrp_0", "slot_rsrp_1", "slot_rsrp_2", "slot_rsrp_3", "slot_rsrp_4",
-    "rsrp_delta_0", "rsrp_delta_1", "rsrp_delta_2", "rsrp_delta_3", "rsrp_delta_4",
+    "slot_rsrp_0", "slot_rsrp_1", "slot_rsrp_2",
+    "rsrp_delta_0", "rsrp_delta_1", "rsrp_delta_2",
+    "dl_sinr", "time_since_ho", "norm_goodput", "ho_count_10s",
+    # UL block: serving-cell UL SRS SINR, RB utilization, scheduled-UE count.
+    "ul_sinr", "ul_rb_util", "ul_sched_ue",
+    # Time-delta block (1 s trends).
     "d_serving_rsrp", "d_serving_sinr", "d_serving_rsrq", "d_norm_goodput", "d_margin_best",
-    "d_slot_rsrp_0", "d_slot_rsrp_1", "d_slot_rsrp_2", "d_slot_rsrp_3", "d_slot_rsrp_4",
-    "sinr", "heading_x", "heading_y", "heading_z", "tbs", "time_since_ho", "norm_goodput",
-    "ho_count_10s",
+    "d_slot_rsrp_0", "d_slot_rsrp_1", "d_slot_rsrp_2",
+    # Heading + trajectory (pos and position 2 s ahead, normalized by ISD).
+    "heading_x", "heading_y", "heading_z",
+    "pos_x", "pos_y", "pos_z",
+    "pos2s_x", "pos2s_y", "pos2s_z",
 ]
 
 
@@ -123,7 +134,7 @@ def load_observations(obs_file: str, min_time: float | None, max_time: float | N
         p = p / "rl_obs.csv"
     if not p.exists():
         raise FileNotFoundError(f"no rl_obs.csv found at {p}")
-    df = pd.read_csv(p, header=None)
+    df = pd.read_csv(p, skiprows=1, header=None)
     n_obs_cols = df.shape[1] - 1
     if n_obs_cols < expected_dim:
         raise ValueError(
@@ -169,9 +180,13 @@ def main() -> None:
         from ray.rllib.models.preprocessors import get_preprocessor
         prep = get_preprocessor(policy.observation_space)(policy.observation_space)
         flat_shape = tuple(prep.shape)
-        if flat_shape != (len(FEATURE_NAMES),):
-            print(f"WARNING: policy obs shape {flat_shape} != {len(FEATURE_NAMES)} "
-                  f"(FEATURE_NAMES); names may be misaligned")
+        if flat_shape[0] > len(FEATURE_NAMES):
+            print(f"ERROR: policy obs shape {flat_shape} exceeds {len(FEATURE_NAMES)} "
+                  f"(FEATURE_NAMES); extend the names list")
+            sys.exit(1)
+        elif flat_shape != (len(FEATURE_NAMES),):
+            print(f"NOTE: policy obs shape {flat_shape} < {len(FEATURE_NAMES)} "
+                  f"(FEATURE_NAMES); using the first {flat_shape[0]} names")
 
         def batched_compute(x: np.ndarray) -> np.ndarray:
             """Return argmax/exploit actions for a batch of flat obs."""
@@ -191,9 +206,13 @@ def main() -> None:
             d = pickle.load(open(policy_dir / "class_and_ctor_args.pkl", "rb"))
             obs_space = d["ctor_args_and_kwargs"][1]["observation_space"]
         flat_shape = tuple(int(s) for s in obs_space.shape)
-        if flat_shape != (len(FEATURE_NAMES),):
-            print(f"WARNING: policy obs shape {flat_shape} != {len(FEATURE_NAMES)} "
-                  f"(FEATURE_NAMES); names may be misaligned")
+        if flat_shape[0] > len(FEATURE_NAMES):
+            print(f"ERROR: policy obs shape {flat_shape} exceeds {len(FEATURE_NAMES)} "
+                  f"(FEATURE_NAMES); extend the names list")
+            sys.exit(1)
+        elif flat_shape != (len(FEATURE_NAMES),):
+            print(f"NOTE: policy obs shape {flat_shape} < {len(FEATURE_NAMES)} "
+                  f"(FEATURE_NAMES); using the first {flat_shape[0]} names")
 
         def batched_compute(x: np.ndarray) -> np.ndarray:
             """Return argmax actions for a batch of flat obs (module forward)."""
@@ -224,6 +243,9 @@ def main() -> None:
           f"{dict(zip(*np.unique(ref, return_counts=True)))}")
 
     # ── Permutation importance ──────────────────────────────────────
+    # Action CHANGE RATE per feature: fraction of argmax decisions that flip
+    # when the feature column is shuffled (binary — the Discrete(N) action
+    # index is not an interval scale for handovers).
     n_feat = obs.shape[1]
     importance = np.zeros((args.repeat, n_feat))
     for r in range(args.repeat):
@@ -232,7 +254,7 @@ def main() -> None:
             perm = np.random.permutation(len(x))
             x[:, i] = x[perm, i]
             act = batched_compute(x).astype(np.int64)
-            importance[r, i] = np.mean(np.abs(act - ref))
+            importance[r, i] = np.mean(act != ref)
         print(f"repeat {r + 1}/{args.repeat} done")
 
     mean_imp = importance.mean(axis=0)

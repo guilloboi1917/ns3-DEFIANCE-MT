@@ -61,7 +61,7 @@ CONE_RADIUS = 0.25 * intersite_distance
 HALF_BEAM_DEG = 35.0  # half aperture of the drawn cone (sector ~ 65 deg HPBW)
 
 mobility_data = pd.read_csv(
-    MOBILITY_FILE, header=None, names=["time", "position", "isWaypoint"])
+    MOBILITY_FILE, skiprows=1, header=None, names=["time", "position", "isWaypoint"])
 
 # Split into waypoints (CourseChange events) and intermediate (periodic) points
 waypointData = mobility_data[mobility_data["isWaypoint"] == 1]

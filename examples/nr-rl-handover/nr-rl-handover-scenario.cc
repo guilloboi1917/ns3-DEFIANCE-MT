@@ -1,12 +1,15 @@
 #include "ns3/core-module.h"
 #include "ns3/flow-monitor-helper.h" // Remove later for RL learning
 #include "ns3/network-module.h"
+#include "ns3/mobility-module.h" // Waypoint for the g_uavWaypoints plan (needed before the globals)
 #include "ns3/nr-module.h"
 
 using namespace ns3;
 
 double ueSpeed = 20.0;            // m/s
 double simDuration = 30.0;        // seconds
+uint32_t bandwidthMhz = 20;        // MHz (10 = fast iteration, halve RBs)
+double trafficRateMbps = 100.0;   // UAV OnOff data rate (Mbps)
 double intersiteDistance = 500.0; // m
 uint32_t numMacroCells = 7;       // number of macro cells
 double gnbDowntilt = 10.0;        // degrees
@@ -31,18 +34,20 @@ double rlAlphaGoodput = 0.8;              ///< Deng-style: weight for goodput te
 double rlBetaGoodput = 5.0;              ///< Deng-style: goodput sensitivity
 double rlBetaHandover = 60.0;             ///< Deng-style: handover sensitivity
 std::string rlRewardComposition = "additive"; ///< Reward combination: additive | multiplicative
-bool useTbsObservation = false;                ///< Emit real avg TBS at obs index 26, or a constant
 double rlPingPongMultiplier = 5.0;            ///< betaHandover multiplier on A->B->A ping-pong
+uint32_t rlHandoverHangoverLength = 4;        ///< Reward tax duration (steps) per handover event
 bool rlHandoverRatePenalty = false;           ///< Windowed handover-rate (signaling budget) penalty
 uint32_t rlHandoverRateWindowMs = 10000;      ///< Sliding window for the rate count (ms)
 uint32_t rlHandoverRateBudget = 2;            ///< Free handovers per window before penalizing
 double rlHandoverRateLambda = 0.2;            ///< Marginal penalty per excess handover in the window
-uint32_t rlTopN = 3;                           ///< Action-space Top-N (non-serving cells); obs ranks 5 slots
-uint32_t rlHandoverDebounceMs = 0;             ///< Min interval between executed handovers (ms); 0 = off
 double rlRewardRefMbps = 40.0;                ///< Reward/obs goodput reference (Mbps): normG = goodput/ref
-std::string rlRewardGoodputShape = "deng";   ///< R_G shape: deng | linear | exp_decay | compl_pwr
+std::string rlRewardGoodputShape = "compl_pwr";   ///< R_G shape: deng | linear | exp_decay | compl_pwr
 double rlRewardGoodputAlpha = 3.0;            ///< exp_decay rate
 double rlRewardGoodputP = 0.4;                ///< compl_pwr exponent
+uint32_t rlcTxBufferBytes = 180000;          ///< RLC TX buffer cap (0 = unlimited)
+std::string errorModel = "eesm-ir-t1";       ///< PHY error model: eesm-ir-t1 (default) | eesm-ir-t2 | eesm-cc-t2 | eesm-cc-t1 | lte-mi
+uint32_t channelUpdateMs = 50;               ///< channel UpdatePeriod ms (0 = disabled; 50 ms default: 50 ms x 20 m/s = 1 m, matching the spatial-consistency step)
+std::string channelModel = "umav";          ///< channel: umav (3GPP TR 38.901 UMa-AV, default) | tworay (TwoRaySpectrumPropagationLossModel)
 std::string g_flowDirection = "dl";
 std::string g_transportProtocol = "udp";
 uint32_t g_senderNodeId = 0;     //!< Node ID running OnOff (varies by flowDirection)
@@ -72,9 +77,22 @@ bool g_handoverInProgress = false;    // True while a handover is being prepared
 bool g_tcpAlive = false;              // True while TCP connection is alive
 bool g_rlfTriggered = false;          // True when RLF detected mid-episode
 std::vector<double> g_lastRsrpValues; // per-cell RSRP in dBm (-200 = unknown)
-std::vector<double> g_lastSinrValues; // per-cell UL SRS SINR (dB, -40 = unknown)
+std::vector<double> g_lastSinrValues; // per-cell SINR, direction-dependent: DL data SINR at the UE (dl mode) / UL SRS SINR at the gNB (ul & tcp modes); dB, -40 = unknown
+std::vector<double> g_ulSinrSum;    // per-cell UL-SINR step accumulators (gNB RB-averaged, dB)
+std::vector<uint32_t> g_ulSinrCount; // per-cell UL-SINR step sample counts
 std::vector<double> g_lastRsrqValues; // per-cell RSRQ in dB  (-200 = unknown)
-uint32_t g_topNCells[6] = {0, 0, 0, 0, 0, 0}; // Top-N ranked cell IDs [0]=no-op, [1..5]=ranked
+uint32_t g_topNCells[4] = {0, 0, 0, 0};       // Top-3 ranked cell IDs [0]=no-op, [1..3]=ranked (Top-N fixed at 3)
+
+// Trajectory observation support: the pre-generated UAV waypoint plan and the
+// observation tier. The plan is copied here by scenarioSetup when the mobility
+// is installed (both topology branches); the obs-app lerps positions from it.
+std::vector<Waypoint> g_uavWaypoints; ///< (time, pos) plan; piecewise-linear motion between consecutive entries
+double g_simDuration = 0.0;          ///< Episode duration (s); obs-app lookahead clamp
+
+// UL load observations (serving cell, last UL slot): RB utilization and the
+// scheduled-UE count (contention). 0 when the UL scheduler is idle.
+double g_ulServingRbUtil = 0.0;    ///< Serving-cell UL RB utilization fraction [0,1]
+uint32_t g_ulServingSchedUe = 0;  ///< Serving-cell scheduled-UE count (last slot)
 
 Ptr<NrHelper> g_nrHelper;
 Ptr<NrPointToPointEpcHelper> g_nrEpcHelper;
@@ -106,6 +124,13 @@ main(int argc, char* argv[])
     CommandLine cmd(__FILE__);
     cmd.AddValue("ueSpeed", "Speed of the UAV in m/s", ueSpeed);
     cmd.AddValue("simDuration", "Duration of the simulation in seconds", simDuration);
+    cmd.AddValue("bandwidthMhz",
+                 "Carrier bandwidth in MHz (20 default; 10 halves RBs for fast iteration",
+                 bandwidthMhz);
+    cmd.AddValue("trafficRateMbps",
+                 "UAV OnOff data rate in Mbps (default 100; below link capacity the rate "
+                 "becomes the goodput ceiling and idle slots appear)",
+                 trafficRateMbps);
     cmd.AddValue("intersiteDistance",
                  "Distance between the two gNodeBs in meters",
                  intersiteDistance);
@@ -169,14 +194,15 @@ main(int argc, char* argv[])
                  "Reward combination: additive (alpha*R_G + (1-alpha)*R_H) or "
                  "multiplicative (R_G * R_H)",
                  rlRewardComposition);
-    cmd.AddValue("useTbsObservation",
-                 "Emit the real avg TBS at obs index 26. false -> constant 0.0 "
-                 "(removes the goodput-reward-proxy feature, layout unchanged)",
-                 useTbsObservation);
     cmd.AddValue("rlPingPongMultiplier",
                  "Multiplier applied to betaHandover on ping-pong (A->B->A) "
                  "patterns. Default 5.0.",
                  rlPingPongMultiplier);
+    cmd.AddValue("rlHandoverHangoverLength",
+                 "Number of steps the handover reward penalty persists after "
+                 "a handover (I_ho stays true). Default 4. Halving (2) halves "
+                 "the per-handover reward tax.",
+                 rlHandoverHangoverLength);
     cmd.AddValue("rlHandoverRatePenalty",
                  "Enable the windowed handover-rate (signaling budget) penalty: "
                  "on each handover event, handovers within the last "
@@ -193,17 +219,6 @@ main(int argc, char* argv[])
     cmd.AddValue("rlHandoverRateLambda",
                  "Marginal reward penalty per excess handover in the window.",
                  rlHandoverRateLambda);
-    cmd.AddValue("rlTopN",
-                 "Action-space Top-N: 0 = stay, 1..rlTopN = handover to the "
-                 "k-th best NON-serving cell. The serving cell is excluded "
-                 "from the ranking. Obs keeps 5 ranked slots for context.",
-                 rlTopN);
-    cmd.AddValue("rlHandoverDebounceMs",
-                 "Min interval between EXECUTED handovers in ms (3GPP TTT "
-                 "analog). 0 = disabled. Hard rate cap: at D ms, at most "
-                 "floor(W/D)+1 handovers fit in any W-window (e.g. D=6000 -> "
-                 "at most 2 per 10s, exactly the rate-penalty budget).",
-                 rlHandoverDebounceMs);
     cmd.AddValue("rlRewardRefMbps",
                  "Goodput reference for normalized goodput (normG = goodput/ref) "
                  "in Mbps. Affects both the reward (R_G) and the obs norm_goodput "
@@ -223,6 +238,24 @@ main(int argc, char* argv[])
     cmd.AddValue("rlRewardGoodputP",
                  "compl_pwr exponent (0<p<1) for the reward goodput shape.",
                  rlRewardGoodputP);
+    cmd.AddValue("rlcTxBufferBytes",
+                 "RLC TX buffer cap in bytes for UM and AM (0 = unlimited)",
+                 rlcTxBufferBytes);
+    cmd.AddValue("errorModel",
+                 "PHY error model: eesm-ir-t1 (default) | eesm-ir-t2 | eesm-cc-t2 | "
+                 "eesm-cc-t1 | lte-mi (NrLteMiErrorModel)",
+                 errorModel);
+    cmd.AddValue("channelUpdateMs",
+                 "Channel UpdatePeriod in ms (0 = disabled, module default; 50 default: "
+                 "50 ms x 20 m/s = 1 m spatial-consistency step)",
+                 channelUpdateMs);
+    cmd.AddValue("channelModel",
+                 "Channel model: umav (3GPP TR 38.901 UMa-AV, default) | tworay "
+                 "(TwoRaySpectrumPropagationLossModel — drops the 3GPP channel "
+                 "matrix/spatial-consistency machinery; UMa-AV adopted (condition "
+                 "+ propagation stay UMa-AV, FTR fading aliases UMa): median SINR "
+                 "27 vs 25 dB but deeper fades — benchmark-only)",
+                 channelModel);
     cmd.AddValue("flowDirection",
                  "TCP flow direction: ul (UAV->remoteHost) or dl (remoteHost->UAV)",
                  g_flowDirection);
@@ -241,16 +274,15 @@ main(int argc, char* argv[])
 
     if (rlMode)
     {
-        // RL mode requires UDP + DL
+        // RL mode requires UDP (TCP RL is not validated with the current
+        // obs/reward design). flowDirection may be dl or ul: the obs carries
+        // both a DL (UE data SINR, -40 in UL-only flows) and an UL block
+        // (gNB SRS SINR + load, -40/0 in DL-only flows); the reward goodput
+        // tracks the sink on g_receiverNodeId (direction-correct).
         if (g_transportProtocol != "udp")
         {
             NS_FATAL_ERROR("RL mode requires --transportProtocol=udp (got "
                            << g_transportProtocol << ")");
-        }
-        if (g_flowDirection != "dl")
-        {
-            NS_FATAL_ERROR("RL mode requires --flowDirection=dl (got "
-                           << g_flowDirection << ")");
         }
 
         OpenGymMultiAgentInterface::Get();
@@ -261,6 +293,7 @@ main(int argc, char* argv[])
                   << " alphaGoodput=" << rlAlphaGoodput
                   << " betaGoodput=" << rlBetaGoodput
                   << " betaHandover=" << rlBetaHandover
+                  << " hangoverLength=" << rlHandoverHangoverLength
                   << " rewardComposition=" << rlRewardComposition << std::endl;
     }
 
@@ -268,6 +301,8 @@ main(int argc, char* argv[])
                   g_transportProtocol,
                   ueSpeed,
                   simDuration,
+                  bandwidthMhz,
+                  trafficRateMbps,
                   intersiteDistance,
                   numMacroCells,
                   gnbDowntilt,
@@ -293,24 +328,42 @@ main(int argc, char* argv[])
                   rlBetaGoodput,
                   rlBetaHandover,
                   rlRewardComposition,
-                  useTbsObservation,
                   rlPingPongMultiplier,
+                  rlHandoverHangoverLength,
                   rlHandoverRatePenalty,
                   rlHandoverRateWindowMs,
                   rlHandoverRateBudget,
                   rlHandoverRateLambda,
-                  rlTopN,
-                  rlHandoverDebounceMs,
                   rlRewardRefMbps,
                   rlRewardGoodputShape,
                   rlRewardGoodputAlpha,
                   rlRewardGoodputP,
+                  rlcTxBufferBytes,
+                  errorModel,
+                  channelUpdateMs,
+                  channelModel,
                   outputDirCli);
+
+    // FlowMonitor: install BEFORE Simulator::Run() so it can observe the flows
+    // (2026-08-13: previously installed after Run, leaving nr-rl.flowmonitor
+    // empty). Serialization stays after Run to capture the final per-flow stats.
+    FlowMonitorHelper flowmonHelper;
+    if (g_logging)
+    {
+        flowmonHelper.Install(g_uavContainer);
+        flowmonHelper.Install(g_remoteHostContainer);
+    }
 
     auto start = std::chrono::high_resolution_clock::now();
     Simulator::Stop(Seconds(simDuration));
 
     Simulator::Run();
+
+    // Flush the CSV loggers so the output files are complete before the
+    // summary prints (the loggers buffer writes; see LogStream in
+    // nr-rl-handover-scenario-setup.cc).
+    FlushLogStreams();
+
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed = end - start;
     std::cout << "Simulation time: " << elapsed.count() << " seconds" << std::endl;
@@ -322,9 +375,6 @@ main(int argc, char* argv[])
     std::cout << "Average RTT: " << avgRttMs << " ms" << std::endl;
     if (g_logging)
     {
-        FlowMonitorHelper flowmonHelper;
-        flowmonHelper.Install(g_uavContainer);
-        flowmonHelper.Install(g_remoteHostContainer);
         flowmonHelper.SerializeToXmlFile(
             g_outputDir + "nr-rl.flowmonitor",
             true,

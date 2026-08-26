@@ -11,7 +11,7 @@
 #       contrib/defiance/examples/nr-rl-handover/evaluation-scenarios/agent-scenarios.yaml -j 4
 #
 # Reward/obs-affecting settings (rlRewardComposition, rlBetaHandover,
-# stepTime, useTbsObservation, ...) are INHERITED from the checkpoint run's
+# stepTime, reward settings, ...) are INHERITED from the checkpoint run's
 # meta.yaml when they are not listed here — so the eval reward matches
 # training even while the scenarios vary topology/interference/heights.
 # Explicit `common:` values override the inherited ones.
@@ -29,18 +29,22 @@ evaluation:
   # alpha=0.8 checkpoint before evaluating.
   checkpoint: /home/nisaak/ray_results/SAC_2026-08-04_20-56-01/
   n_seeds: 7
-  sim_time: 70
+  sim_time: 50                 # matched to scenarios-a3-baseline-10mhz.yaml (2026-08-13)
   common:
     transportProtocol: udp
     flowDirection: dl
     uavMobility: random-waypoint
     startHeight: 50
-    endHeight: 150
+    endHeight: 200
+    bandwidthMhz: 10           # canonical campaign config (2026-08-13)
+    errorModel: eesm-ir-t1     # canonical campaign config (2026-08-13)
+    channelUpdateMs: 50        # canonical campaign config (2026-08-13)
+    rlRewardRefMbps: 10         # must match train-ppo-dl-if.yaml (2026-08-25)
   scenarios:
-    - tag: triangle-no-if
+    - tag: triangle-dl-if
       topology: triangle
-      addInterferingUes: 0
-      aerialUeRatio: 0.0
+      addInterferingUes: 4
+      aerialUeRatio: 1.0
 
     # - tag: triangle-4if
     #   topology: triangle

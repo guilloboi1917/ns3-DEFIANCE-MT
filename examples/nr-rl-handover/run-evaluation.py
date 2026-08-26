@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-run-evaluation.py — Batch evaluation runner for defiance-nr-rl-handover.
+run-evaluation.py — Batch A3-baseline runner for defiance-nr-rl-handover.
 
 Usage:
     cd /path/to/ns-3-dev
@@ -10,6 +10,19 @@ Reads a YAML scenario matrix, runs ns-3 for each (scenario, seed) via
 ./ns3 run with --logging=true and per-seed output directories, then parses
 the generated CSV files to extract evaluation metrics. Produces per-scenario
 raw.csv (per-seed) and aggregate.csv (statistics across seeds).
+
+A3 baselines only: run-evaluation.py runs the raw binary with rlMode=false
+and NO checkpoint loading — RL-agent policy evals go through evaluate-agent.py
++ agent-scenarios.yaml instead.
+
+Seed alignment (2026-08-11): seeds run 1..n_seeds and runId=1 for every seed,
+matching evaluate-agent.py. The UAV waypoint RNGs are pinned to fixed streams
+(AssignStreams 100-102) in scenarioSetup, so the same seed yields IDENTICAL
+trajectories in rlMode=false (this script) and rlMode=true (RL evals) —
+per-seed A3-vs-RL comparison is valid only with that isolation in place.
+The aerial-interferer RNGs are pinned to streams 110 / 111+2i / 112+2i
+(2026-08-12) so the interference REGIME is likewise (seed, runId, i)-
+deterministic across modes.
 
 See TODO-PLANNING.md §21 for the metric set.
 """
@@ -51,7 +64,7 @@ def build_ns3_cmd(scenario, common, eval_defaults, seed, output_dir):
     args = f"{NS3_BIN}"
     args += f" --simDuration={params['sim_time']}"
     args += f" --seed={seed}"
-    args += f" --runId={seed}"
+    args += f" --runId=1"          # match evaluate-agent.py (runId is fixed; seed varies)
     args += f" --topology={params.get('topology', 'hexgrid')}"
     args += f" --flowDirection={params.get('flowDirection', 'ul')}"
     args += f" --uavMobility={params.get('uavMobility', 'random-waypoint')}"
@@ -61,19 +74,23 @@ def build_ns3_cmd(scenario, common, eval_defaults, seed, output_dir):
     args += f" --addInterferingUes={params.get('addInterferingUes', 0)}"
     args += f" --aerialUeRatio={params.get('aerialUeRatio', 0.0)}"
     args += f" --transportProtocol={params.get('transportProtocol', 'tcp')}"
+    # Canonical config (10 MHz campaign, ref 20): forwarded explicitly so the
+    # A3 baseline shares the RL campaign's bandwidth/reward-reference settings.
+    args += f" --bandwidthMhz={params.get('bandwidthMhz', 20)}"
+    args += f" --rlRewardRefMbps={params.get('rlRewardRefMbps', 40.0)}"
     args += " --logging=true"
     args += " --parallel=0"
     args += f" --outputDir={output_dir}"
 
-    if algo == "agent":
-        args += " --rlMode=true"
-        args += " --handoverAlgorithm=agent"
-        args += f" --stepTime={params.get('stepTime', 480)}"
-        args += " --handoverMargin=-999"
-    else:
-        args += " --rlMode=false"
-        args += f" --handoverAlgorithm={algo}"
-        args += f" --handoverMargin={params.get('handoverMargin', 3.0)}"
+    # A3 baselines only (see module docstring); reject anything else loudly.
+    algo = params.pop("algorithm", "a3")
+    if algo != "a3":
+        raise SystemExit(f"[ERROR] run-evaluation.py runs A3 baselines only "
+                         f"(no checkpoint loading); got algorithm={algo!r}. "
+                         f"Use evaluate-agent.py for RL-policy evals.")
+    args += " --rlMode=false"
+    args += " --handoverAlgorithm=a3"
+    args += f" --handoverMargin={params.get('handoverMargin', 3.0)}"
 
     return ["ns3", "run", args]
 
@@ -106,7 +123,7 @@ def parse_sink_packets(path: Path) -> float:
     """
     if not path.exists():
         return 0.0
-    df = pd.read_csv(path, header=None, names=["time", "bytes"])
+    df = pd.read_csv(path, skiprows=1, header=None, names=["time", "bytes"])
     return int(df["bytes"].sum())
 
 
@@ -117,21 +134,27 @@ def parse_rtt(path: Path) -> tuple:
     """
     if not path.exists():
         return np.array([]), None
-    df = pd.read_csv(path, header=None, names=["time", "rttMs"])
+    df = pd.read_csv(path, skiprows=1, header=None, names=["time", "rttMs"])
     if len(df) == 0:
         return np.array([]), None
     return df["rttMs"].to_numpy(), df["time"].iloc[0]
 
 
 def parse_dl_sinr(path: Path) -> np.ndarray:
-    """Parse dl_sinr.csv. Format: time,cellId,rnti,sinrDb.
+    """Parse the traffic-direction SINR CSV.
+
+    dl mode: dl_sinr.csv (UE DL data SINR, 4 cols: time,cellId,rnti,sinrDb);
+    ul mode: ul_sinr_srs.csv (gNB UL SRS SINR, 3 cols: time,cellId,sinrDb —
+    the SRS trace carries no RNTI). SINR is always the LAST column; reading it
+    positionally avoids the NaN schema mismatch that a fixed 4-column header
+    produced for the 3-column UL file (2026-08-13).
 
     Returns array of SINR values in dB.
     """
     if not path.exists():
         return np.array([])
-    df = pd.read_csv(path, header=None, names=["time", "cellId", "rnti", "sinrDb"])
-    return df["sinrDb"].to_numpy()
+    df = pd.read_csv(path, )
+    return df.iloc[:, -1].to_numpy()
 
 
 def parse_ue_meas(path: Path) -> tuple:
@@ -141,7 +164,7 @@ def parse_ue_meas(path: Path) -> tuple:
     """
     if not path.exists():
         return np.array([]), np.array([])
-    df = pd.read_csv(path, header=None,
+    df = pd.read_csv(path, skiprows=1, header=None,
                      names=["time", "cellId", "rnti", "rsrp", "rsrq", "isServingCell"])
     serving = df[df["isServingCell"] == 1]
     return serving["rsrp"].to_numpy(), serving["rsrq"].to_numpy()
@@ -154,7 +177,7 @@ def parse_handovers(path: Path) -> tuple:
     """
     if not path.exists():
         return 0, np.array([]), np.array([])
-    df = pd.read_csv(path, header=None, names=["time", "cellId"])
+    df = pd.read_csv(path, skiprows=1, header=None, names=["time", "cellId"])
     return len(df), df["time"].to_numpy(), df["cellId"].to_numpy()
 
 
@@ -201,10 +224,12 @@ def write_raw_csv(path: Path, rows: list):
     fieldnames = [
         "seed", "goodputMbps", "handovers", "pingPongCount", "rlfCount",
         "rttMs_avg", "rttMs_p50",
-        "sinrDb_avg", "sinrDb_p50",
+        "dlSinrDb_avg", "dlSinrDb_p50", "ulSinrDb_avg", "ulSinrDb_p50",
         "rsrpServingDbm_avg", "rsrqServingDb_avg",
-        "retransmissions", "tcpConnectTime", "simTime"
+        "retransmissions", "lossRatio", "tcpConnectTime", "simTime"
     ]
+    # keep only the direction-specific SINR keys present in this scenario
+    fieldnames = [k for k in fieldnames if k in rows[0]]
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
@@ -219,7 +244,8 @@ UNIT_MAP = {
     "pingPongCount": "count",
     "rlfCount": "count",
     "rttMs": "ms",
-    "sinrDb": "dB",
+    "dlSinrDb": "dB",
+    "ulSinrDb": "dB",
     "rsrpServingDbm": "dBm",
     "rsrqServingDb": "dB",
     "retransmissions": "count",
@@ -237,7 +263,8 @@ def write_aggregate_csv(path: Path, aggregate: dict):
         writer = csv.writer(f)
         writer.writerow(fieldnames)
         for metric, stats in sorted(aggregate.items()):
-            unit = UNIT_MAP.get(metric, "")
+            # metric keys carry an _avg/_p50 suffix; look up the base name
+            unit = UNIT_MAP.get(metric.rsplit("_", 1)[0], "")
             writer.writerow([
                 metric,
                 f"{stats['mean']:.4f}",
@@ -252,6 +279,45 @@ def write_aggregate_csv(path: Path, aggregate: dict):
 # ---------------------------------------------------------------------------
 #   Per-seed execution (runs inside ThreadPoolExecutor workers)
 # ---------------------------------------------------------------------------
+
+def sinr_csv_for(flow: str, seed_dir: Path) -> Path:
+    """Pick the SINR source matching the traffic direction."""
+    if flow == "ul":
+        return seed_dir / "ul_sinr_srs.csv"
+    return seed_dir / "dl_sinr.csv"
+
+
+def parse_flowmon_loss(path: Path) -> dict:
+    """Parse the FlowMonitor XML for the UAV flows (nr-rl.flowmonitor).
+
+    Returns per-flow loss ratios computed from the tx/rx gap (ns-3's
+    lostPackets field under-reports radio losses — see flowmon-parse-results.py).
+    Keyed by (src, dst); addresses come from the Ipv4/Ipv6 classifiers.
+    """
+    if not path.exists():
+        return {}
+    try:
+        import xml.etree.ElementTree as ET
+        root = ET.parse(path).getroot()
+    except Exception:
+        return {}
+    stats = {}   # flowId -> (tx, rx)
+    addrs = {}   # flowId -> (src, dst)
+    for el in root.iter("Flow"):
+        fid = el.get("flowId")
+        if fid is None:
+            continue
+        if "txPackets" in el.attrib:
+            stats[fid] = (int(el.get("txPackets", 0)), int(el.get("rxPackets", 0)))
+        if "sourceAddress" in el.attrib:
+            addrs[fid] = (el.get("sourceAddress"), el.get("destinationAddress"))
+    flows = {}
+    for fid, (tx, rx) in stats.items():
+        if tx > 0:
+            src, dst = addrs.get(fid, ("?", "?"))
+            flows[(src, dst)] = round(1.0 - rx / tx, 4)
+    return flows
+
 
 def run_one_seed(sc, common, eval_defaults, seed, tag_dir, sim_time):
     """Run one seed: execute ns-3 subprocess, parse CSVs, return result row."""
@@ -283,13 +349,19 @@ def run_one_seed(sc, common, eval_defaults, seed, tag_dir, sim_time):
     rtt_avg = float(np.mean(rtt_samples)) if rtt_samples.size > 0 else 0.0
     rtt_p50 = float(np.median(rtt_samples)) if rtt_samples.size > 0 else 0.0
 
-    sinr_vals = parse_dl_sinr(seed_dir / "dl_sinr.csv")
+    flow = sc.get("flowDirection", common.get("flowDirection", "dl"))
+    sinr_vals = parse_dl_sinr(sinr_csv_for(flow, seed_dir))
     sinr_avg = float(np.mean(sinr_vals)) if sinr_vals.size > 0 else 0.0
     sinr_p50 = float(np.median(sinr_vals)) if sinr_vals.size > 0 else 0.0
 
     rsrp_vals, rsrq_vals = parse_ue_meas(seed_dir / "ue_meas_report.csv")
     rsrp_avg = float(np.mean(rsrp_vals)) if rsrp_vals.size > 0 else 0.0
     rsrq_avg = float(np.mean(rsrq_vals)) if rsrq_vals.size > 0 else 0.0
+
+    # End-to-end IP loss ratio from the FlowMonitor (radio-visible UAV flow)
+    loss_flows = parse_flowmon_loss(seed_dir / "nr-rl.flowmonitor")
+    loss_ratios = list(loss_flows.values())
+    loss_ratio = float(np.mean(loss_ratios)) if loss_ratios else 0.0
 
     ho_count, ho_times, ho_cells = parse_handovers(seed_dir / "nr-rl-handovers.csv")
     ping_pong = count_ping_pong(ho_times, ho_cells)
@@ -303,11 +375,15 @@ def run_one_seed(sc, common, eval_defaults, seed, tag_dir, sim_time):
         "rlfCount": stdout_metrics.get("rlfCount", 0),
         "rttMs_avg": round(rtt_avg, 2),
         "rttMs_p50": round(rtt_p50, 2),
-        "sinrDb_avg": round(sinr_avg, 2),
-        "sinrDb_p50": round(sinr_p50, 2),
+        # Direction-specific SINR keys: dlSinrDb_* (dl_sinr.csv, UE DL data
+        # SINR) for dl flows, ulSinrDb_* (ul_sinr_srs.csv, gNB RB-averaged UL
+        # SINR) for ul flows — the old bare "sinrDb" was ambiguous (2026-08-13).
+        f"{flow}SinrDb_avg": round(sinr_avg, 2),
+        f"{flow}SinrDb_p50": round(sinr_p50, 2),
         "rsrpServingDbm_avg": round(rsrp_avg, 2),
         "rsrqServingDb_avg": round(rsrq_avg, 2),
         "retransmissions": stdout_metrics.get("retransmissions", 0),
+        "lossRatio": round(loss_ratio, 4),
         "tcpConnectTime": round(tcp_connect, 4),
         "simTime": round(stdout_metrics.get("simTime", 0.0), 4),
     }
@@ -319,7 +395,7 @@ def run_one_seed(sc, common, eval_defaults, seed, tag_dir, sim_time):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Batch evaluation runner for defiance-nr-rl-handover"
+        description="Batch A3-baseline runner for defiance-nr-rl-handover"
     )
     parser.add_argument("scenarios_yaml", type=str,
                         help="Path to YAML scenario matrix")
