@@ -7,8 +7,8 @@ batch and the ACTION CHANGE RATE (fraction of argmax actions that flip,
 mean(perturbed_actions != ref_actions)) is recorded. The change rate is used
 rather than the mean absolute action-index shift: the Discrete(N) index has no
 ordinal meaning for handovers (stay<->handover is more significant than
-switching handover targets), so a binary flip measure is the defensible one
-(2026-08-11). Features the policy relies on show high importance; unused
+switching handover targets), so a binary flip measure is the defensible one.
+Features the policy relies on show high importance; unused
 features show ~0.
 
 Requires:
@@ -19,7 +19,7 @@ Requires:
 
 Usage:
     python3 feature-importance.py \\
-        --checkpoint ~/ray_results/SAC_2026-07-31_00-18-10 \\
+        --checkpoint ~/ray_results/PPO_<run> \\
         --obs-file output/inference-agent/rl_obs.csv \\
         --min-time 1.0 \\
         --repeat 5
@@ -33,14 +33,16 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
+import yaml
 
 import numpy as np
 import pandas as pd
 
-# 30-dim Top-N observation layout — must match BuildObservation() in
+# Top-N observation layout — must match BuildObservation() in
 # nr-rl-handover-obs-app.cc
 FEATURE_NAMES = [
-    # Final obs layout (32 dims, freeze 2026-08-13), see NR-RL-DESIGN.md §3.
+    # Final obs layout (32 dims).
     "serving_rsrp", "serving_rsrq",
     "slot_rsrp_0", "slot_rsrp_1", "slot_rsrp_2",
     "rsrp_delta_0", "rsrp_delta_1", "rsrp_delta_2",
@@ -55,6 +57,9 @@ FEATURE_NAMES = [
     "pos_x", "pos_y", "pos_z",
     "pos2s_x", "pos2s_y", "pos2s_z",
 ]
+
+training = None 
+obsStackFrames = 1
 
 
 def parse_args() -> argparse.Namespace:
@@ -81,8 +86,18 @@ def parse_args() -> argparse.Namespace:
                    help="rows per compute_actions call")
     return p.parse_args()
 
+def _find_training_meta(checkpoint: Path) -> Path | None:
+    """Locate the run meta.yaml from a checkpoint path (exp dir,
+    best_checkpoint dir, or a checkpoint_N dir) by walking up."""
+    if checkpoint.is_file():
+        checkpoint = checkpoint.parent
+    for p in (checkpoint, *checkpoint.parents):
+        meta = p / "meta.yaml"
+        if meta.exists():
+            return meta
+    return None
 
-def resolve_policy_dir(checkpoint_arg: str) -> tuple[Path, str]:
+def resolve_policy_dir(checkpoint_arg: str) -> tuple[Path, str, int]:
     """Resolve checkpoint arg to the per-agent policy/module directory.
 
     Accepts: <exp>/best_checkpoint, <exp>/<trial>/checkpoint_N, or
@@ -96,6 +111,17 @@ def resolve_policy_dir(checkpoint_arg: str) -> tuple[Path, str]:
     if not base.exists():
         raise FileNotFoundError(f"checkpoint path does not exist: {base}")
 
+    meta = _find_training_meta(Path(base))
+    if meta is None:
+        return
+    try:
+        with open(meta) as f:
+            training = (yaml.safe_load(f) or {}).get("ns3_settings", {})
+    except Exception:
+        return
+    if not training:
+        return
+    
     ckpt = base / "best_checkpoint" if (base / "best_checkpoint").is_dir() else base
 
     # New RLModule API stack: learner_group/learner/rl_module/<module_id>
@@ -109,7 +135,7 @@ def resolve_policy_dir(checkpoint_arg: str) -> tuple[Path, str]:
             modules = sorted((ckpt / "learner_group" / "learner" / "rl_module").glob("*"))
     if modules:
         module_dir = next(d for d in modules if d.is_dir())
-        return module_dir, "new"
+        return module_dir, "new", training
 
     # Old API stack: policies/<agent_id>
     if not (ckpt / "policies").is_dir():
@@ -123,11 +149,70 @@ def resolve_policy_dir(checkpoint_arg: str) -> tuple[Path, str]:
     agent_dirs = sorted(d for d in policies.iterdir() if d.is_dir())
     if not agent_dirs:
         raise FileNotFoundError(f"no agent policy dirs under {policies}")
-    return agent_dirs[0], "old"
+
+    return agent_dirs[0], "old", training
+
+import pandas as pd
+import numpy as np
+
+def stack_observations(df: pd.DataFrame, n_stack: int, pad_value=0.0) -> pd.DataFrame:
+    """
+    Expand each column into n_stack columns, preserving ALL rows via padding.
+    
+    Input:  columns [x, y, z]           → shape (T, 3)
+    Output: columns [x_t, y_t, z_t,     → shape (T, 3 * n_stack)  ← same row count
+                     x_t-1, y_t-1, z_t-1,
+                     x_t-2, y_t-2, z_t-2]
+    
+    Rows 0..n_stack-2 are padded with pad_value for missing history.
+    """
+    if n_stack < 1:
+        raise ValueError("n_stack must be >= 1")
+
+    cols = df.columns.tolist()
+    n_features = len(cols)
+    T = len(df)
+
+    arr = df.to_numpy(dtype=np.float64)  # (T, n_features)
+
+    # Pad the top with (n_stack - 1) copies of the FIRST observation — the env's
+    # FrameStackWrapper warm-up repeats the first obs (not zero-pads), so the
+    # padded rows must replicate it to stay on-distribution.
+    if n_stack > 1:
+        padding = np.repeat(arr[0:1], n_stack - 1, axis=0)
+        padded = np.vstack([padding, arr])  # (T + n_stack - 1, n_features)
+    else:
+        padded = arr
+
+    # Block j (0 = oldest, K-1 = current) of row t = padded[t + j], matching
+    # FrameStackWrapper's oldest-first deque concatenation.
+    flat = np.empty((T, n_stack * n_features), dtype=np.float64)
+    for j in range(n_stack):
+        flat[:, j * n_features : (j + 1) * n_features] = padded[j : j + T]
+
+    # Column names in the env's order: oldest frame first, current frame last.
+    new_cols = []
+    for j in range(n_stack):
+        age = n_stack - 1 - j
+        suffix = "t" if age == 0 else f"t-{age}"
+        new_cols.extend([f"{c}_{suffix}" for c in cols])
+
+    return pd.DataFrame(flat, columns=new_cols, index=df.index)
+
+
+def stacked_feature_names(n_stack: int) -> list[str]:
+    """Feature names in the env's stacked layout (oldest frame first,
+    current frame last — matches FrameStackWrapper's deque concatenation)."""
+    names: list[str] = []
+    for age in range(n_stack - 1, -1, -1):
+        suffix = "t" if age == 0 else f"t-{age}"
+        names.extend(f"{n}_{suffix}" for n in FEATURE_NAMES)
+    return names
 
 
 def load_observations(obs_file: str, min_time: float | None, max_time: float | None,
                       limit: float, seed: int, expected_dim: int,
+                      n_stack: int = 1,
                       names: list[str] = FEATURE_NAMES) -> np.ndarray:
     p = Path(obs_file).expanduser()
     if p.is_dir():
@@ -135,7 +220,11 @@ def load_observations(obs_file: str, min_time: float | None, max_time: float | N
     if not p.exists():
         raise FileNotFoundError(f"no rl_obs.csv found at {p}")
     df = pd.read_csv(p, skiprows=1, header=None)
-    n_obs_cols = df.shape[1] - 1
+    # Stack only the obs columns (FrameStackWrapper stacks per-step obs,
+    # not the time column).
+    t = df[0].to_numpy()
+    df = stack_observations(df.iloc[:, 1:], n_stack)
+    n_obs_cols = df.shape[1]
     if n_obs_cols < expected_dim:
         raise ValueError(
             f"eval obs file {p} has {n_obs_cols} obs dims but the policy expects "
@@ -145,7 +234,6 @@ def load_observations(obs_file: str, min_time: float | None, max_time: float | N
     if n_obs_cols > expected_dim:
         print(f"WARNING: eval obs file has {n_obs_cols} dims; using the first "
               f"{expected_dim} (policy layout).")
-    t = df[0].to_numpy()
     mask = np.ones(len(df), dtype=bool)
     if min_time is not None:
         mask &= t >= min_time
@@ -158,7 +246,7 @@ def load_observations(obs_file: str, min_time: float | None, max_time: float | N
     if limit < 1.0:
         df = df.sample(frac=limit, random_state=seed)
 
-    obs = df.iloc[:, 1:1 + expected_dim].to_numpy(dtype=np.float32)
+    obs = df.iloc[:, :expected_dim].to_numpy(dtype=np.float32)
     if obs.shape[1] != len(names[:expected_dim]):
         raise ValueError(
             f"expected {len(names[:expected_dim])} obs columns, got {obs.shape[1]}")
@@ -169,8 +257,19 @@ def main() -> None:
     args = parse_args()
 
     # ── Load policy ──────────────────────────────────────────────────
-    policy_dir, stack = resolve_policy_dir(args.checkpoint)
+    policy_dir, stack, training = resolve_policy_dir(args.checkpoint)
     print(f"Loading policy from {policy_dir} (stack={stack})")
+
+    obsStackFrames = int(training.get("obsStackFrames", 1))
+    
+    if obsStackFrames > 1:
+        print(f"Policy uses obsStackFrames={obsStackFrames}; "
+              f"FEATURE_NAMES will be repeated {obsStackFrames} times")
+
+    # Stacked feature names in the env's layout (oldest frame first) — used for
+    # the dim checks AND the output names.
+    stacked_names = stacked_feature_names(obsStackFrames)
+    n_stacked = len(stacked_names)
 
     if stack == "old":
         from ray.rllib.policy import Policy
@@ -180,13 +279,13 @@ def main() -> None:
         from ray.rllib.models.preprocessors import get_preprocessor
         prep = get_preprocessor(policy.observation_space)(policy.observation_space)
         flat_shape = tuple(prep.shape)
-        if flat_shape[0] > len(FEATURE_NAMES):
-            print(f"ERROR: policy obs shape {flat_shape} exceeds {len(FEATURE_NAMES)} "
-                  f"(FEATURE_NAMES); extend the names list")
+        if flat_shape[0] > n_stacked:
+            print(f"ERROR: policy obs shape {flat_shape} exceeds {n_stacked} "
+                  f"(stacked FEATURE_NAMES); extend the names list")
             sys.exit(1)
-        elif flat_shape != (len(FEATURE_NAMES),):
-            print(f"NOTE: policy obs shape {flat_shape} < {len(FEATURE_NAMES)} "
-                  f"(FEATURE_NAMES); using the first {flat_shape[0]} names")
+        elif flat_shape != (n_stacked,):
+            print(f"NOTE: policy obs shape {flat_shape} < {n_stacked} "
+                  f"(stacked FEATURE_NAMES); using the first {flat_shape[0]} names")
 
         def batched_compute(x: np.ndarray) -> np.ndarray:
             """Return argmax/exploit actions for a batch of flat obs."""
@@ -206,13 +305,13 @@ def main() -> None:
             d = pickle.load(open(policy_dir / "class_and_ctor_args.pkl", "rb"))
             obs_space = d["ctor_args_and_kwargs"][1]["observation_space"]
         flat_shape = tuple(int(s) for s in obs_space.shape)
-        if flat_shape[0] > len(FEATURE_NAMES):
-            print(f"ERROR: policy obs shape {flat_shape} exceeds {len(FEATURE_NAMES)} "
-                  f"(FEATURE_NAMES); extend the names list")
+        if flat_shape[0] > n_stacked:
+            print(f"ERROR: policy obs shape {flat_shape} exceeds {n_stacked} "
+                  f"(stacked FEATURE_NAMES); extend the names list")
             sys.exit(1)
-        elif flat_shape != (len(FEATURE_NAMES),):
-            print(f"NOTE: policy obs shape {flat_shape} < {len(FEATURE_NAMES)} "
-                  f"(FEATURE_NAMES); using the first {flat_shape[0]} names")
+        elif flat_shape != (n_stacked,):
+            print(f"NOTE: policy obs shape {flat_shape} < {n_stacked} "
+                  f"(stacked FEATURE_NAMES); using the first {flat_shape[0]} names")
 
         def batched_compute(x: np.ndarray) -> np.ndarray:
             """Return argmax actions for a batch of flat obs (module forward)."""
@@ -230,7 +329,8 @@ def main() -> None:
     # ── Load observations ───────────────────────────────────────────
     obs = load_observations(args.obs_file, args.min_time, args.max_time,
                             args.limit, args.seed, expected_dim=obs_dim,
-                            names=FEATURE_NAMES[:obs_dim])
+                            n_stack=obsStackFrames,
+                            names=stacked_names[:obs_dim])
     print(f"Loaded {len(obs)} observations "
           f"({args.min_time if args.min_time is not None else 'start'}.."
           f"{args.max_time if args.max_time is not None else 'end'} s)")
@@ -269,7 +369,7 @@ def main() -> None:
 
     order = np.argsort(mean_imp)[::-1]
     rows = [{"feature_index": i,
-             "name": FEATURE_NAMES[i],
+             "name": stacked_names[i],
              "importance": mean_imp[i],
              "std": std_imp[i]}
             for i in order]
@@ -284,7 +384,7 @@ def main() -> None:
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(11, 7))
-    names = [FEATURE_NAMES[i] for i in order]
+    names = [stacked_names[i] for i in order]
     vals = mean_imp[order]
     errs = std_imp[order]
     colors = ["tab:red" if v > 0.02 else "tab:gray" for v in vals]

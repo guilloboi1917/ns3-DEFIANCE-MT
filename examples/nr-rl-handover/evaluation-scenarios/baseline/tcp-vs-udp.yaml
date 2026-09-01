@@ -1,0 +1,41 @@
+# tcp-vs-udp.yaml — transport demo: "why TCP cannot work for the RL part"
+# (design motivation), A3 baseline.
+#
+# Two radio configs, each with a tcp and a udp cell:
+#   1. 10 MHz, numerology 0, 15 Mbps offered  (canonical campaign radio;
+#      measured UL ceiling 13.5 Mbps -> load just above capacity)
+#   2. 50 MHz, numerology 1 (30 kHz), 50 Mbps offered  (n78-realistic;
+#      measured UL ceiling 48.8 Mbps -> 50 Mbps = the TR 36.777 UL data-rate
+#      requirement sits right at the link ceiling)
+# Offered >= ceiling makes the transport the bottleneck: UDP runs near
+# capacity, TCP collapses at handover transients (cwnd/RTT spike, stall).
+# Keeping 50 MHz n1 proves the failure is not a 10 MHz artifact.
+#
+# Cell: [50-100] m @ 20 m/s, triangle, random-waypoint, NO aerial interferers
+# (best-case radio), runId=1, 20 s sim, eesm-ir-t1, RLC AM for tcp / UM for
+# udp (scenario policy), TcpBbr. 10 seeds.
+#
+# Run:
+#   python3 .../run-evaluations.py .../evaluation-scenarios/baseline/tcp-vs-udp.yaml \
+#       --jobs 4 --analyze
+
+evaluation:
+  name: tcp-vs-udp
+  mode: a3
+  n_seeds: 20
+  sim_time: 20
+  common:
+    flowDirection: ul
+    startHeight: 50
+    endHeight: 100
+    ueSpeed: 20
+    addInterferingUes: 0
+    aerialUeRatio: 0
+    topology: triangle
+    uavMobility: random-waypoint
+    tcpVariant: TcpBbr
+  scenarios:
+    - {tag: bw10-n0_tcp, transportProtocol: tcp, bandwidthMhz: 10, numerology: 0, trafficRateMbps: 15}
+    - {tag: bw10-n0_udp, transportProtocol: udp, bandwidthMhz: 10, numerology: 0, trafficRateMbps: 15}
+    - {tag: bw50-n1_tcp, transportProtocol: tcp, bandwidthMhz: 50, numerology: 1, trafficRateMbps: 50}
+    - {tag: bw50-n1_udp, transportProtocol: udp, bandwidthMhz: 50, numerology: 1, trafficRateMbps: 50}
