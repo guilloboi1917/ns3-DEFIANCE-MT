@@ -1,0 +1,51 @@
+type: train
+env_name: defiance-nr-rl-handover
+trainable: PPO
+iterations: 60
+max_episode_steps: 100    # informational for multi-agent
+checkpoint_path: null
+rollout_fragment_length: null
+sample_timeout: 1200.0
+evaluation_num_env_runners: 0
+evaluation_interval: 2
+evaluation_duration: "1"
+evaluation_sample_timeout: 600.0
+
+# RL algorithm hyperparameter overrides (-p key=value pairs).
+training_params:
+  minibatch_size: 128
+  entropy_coeff: [[0, 0.025], [40000, 0.01]]
+  kl_target: 0.01
+  lr: [[0, 0.0005], [40000, 0.00005]]
+  vf_loss_coeff: 1.0       # unrestrained value
+  vf_clip_param: 10.0      # loose clip (return scale ~165)
+  lambda_: 0.9             # less stale-value bootstrap
+  gamma: 0.9               # ~10-step (4 s) effective horizon
+
+# ns-3 run parameters (-c key=value pairs).
+ns3_settings:
+  parallel: "7"
+  simDuration: "50"
+  topology: triangle
+  rlMode: "true"
+  handoverAlgorithm: agent
+  transportProtocol: udp
+  flowDirection: ul
+  addInterferingUes: "4"
+  aerialUeRatio: "1.0"
+  interfererMobility: "static"
+  stepTime: "400"          # 400 ms step: doubles the discount horizon per step
+  obsStackFrames: "2"      # stack 2 obs frames -> 64 dims
+  rlAlphaGoodput: "0.8"
+  rlBetaGoodput: "5"
+  rlBetaHandover: "5"
+  rlRewardComposition: multiplicative
+  rlPingPongMultiplier: "5"
+  rlHandoverHangoverLength: "1"
+  rlRewardRefMbps: "15"    # keeps normG in the steep compl_pwr region
+  rlRewardGoodputShape: "compl_pwr"
+  rlRewardGoodputP: "0.4"
+  bandwidthMhz: "10"
+  errorModel: "eesm-ir-t1"
+  channelUpdateMs: "20"    
+  logging: "false"
