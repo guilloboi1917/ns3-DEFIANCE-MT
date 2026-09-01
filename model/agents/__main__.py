@@ -224,18 +224,26 @@ if "seed" not in ns.ns3_settings:
 ns.ns3_settings["runId"] = int(ns.ns3_settings.get("runId", "1"))
 ns.ns3_settings["parallel"] = int(ns.ns3_settings.get("parallel", "1"))
 
-# Default -tbs to the steps sampled per iteration (parallel * steps per
-# episode), so one gradient update consumes ~all of each iteration's fresh
-# data (with batch_mode=complete_episodes). Without this, e.g. -tbs 300 with
-# 6x70s/200ms (2100 steps/iter) learns from only ~14% of the data.
+# Default -tbs to the steps sampled per iteration (parallel * obs per
+# episode), so one training batch consumes ~all of each iteration's fresh
+# data (with batch_mode=complete_episodes). This matters for on-policy
+# algos (PPO trains on freshly collected rollouts) and is a harmless sizing
+# default for off-policy ones (SAC samples from replay). The campaign
+# configs omit it, so this fallback computes it from the sim config;
+# without it an unpinned PPO run would fall back to RLlib's tiny default
+# train_batch_size (32). RLlib counts simDuration/stepTime - 8 steps per
+# episode (it excludes the reset and terminal transitions; measured -5,
+# plus 3 margin so episode-length variation cannot force a second
+# sampling round under complete_episodes).
 if ns.train_batch_size_per_learner is None:
     parallel = int(ns.ns3_settings.get("parallel", 1))
     sim_duration = float(ns.ns3_settings.get("simDuration", 30))
     step_ms = float(ns.ns3_settings.get("stepTime", 200))
-    steps_per_iter = parallel * (sim_duration / (step_ms / 1000.0))
+    obs_per_episode = int(sim_duration / (step_ms / 1000.0)) - 8
+    steps_per_iter = parallel * obs_per_episode
     ns.train_batch_size_per_learner = int(max(256, min(4096, round(steps_per_iter))))
     print(f"[tbs] computed default train batch size = {ns.train_batch_size_per_learner} "
-          f"(parallel={parallel} x {sim_duration:.0f}s/{step_ms:.0f}ms steps)", flush=True)
+          f"(parallel={parallel} x {obs_per_episode} obs/episode)", flush=True)
 
 # ── Effective metadata: everything needed to reproduce this exact run ──
 def _build_command() -> str:

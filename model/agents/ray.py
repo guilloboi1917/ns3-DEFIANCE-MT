@@ -2,6 +2,7 @@
 
 import logging
 import os
+from collections import deque
 from datetime import datetime
 from functools import partial
 from pathlib import Path
@@ -19,14 +20,12 @@ except ImportError:
 from ns3ai_gym_env.envs.ns3_multi_agent_environment import Ns3MultiAgentEnv
 from ray.air.integrations.wandb import WandbLoggerCallback
 from ray.rllib.algorithms.callbacks import DefaultCallbacks
+from ray.rllib.connectors.connector_v2 import ConnectorV2
 
 from ray.rllib.algorithms import AlgorithmConfig
 from ray.rllib.algorithms.algorithm import Algorithm
-from ray.rllib.connectors.env_to_module import FlattenObservations
+from ray.rllib.connectors.env_to_module import FlattenObservations, PrevActionsPrevRewards
 from ray.rllib.core.rl_module.rl_module import RLModule, RLModuleSpec
-from ray.rllib.examples.rl_modules.classes.action_masking_rlm import (
-    ActionMaskingTorchRLModule,
-)
 from ray.tune import Tuner, register_env
 from ray.tune.callback import Callback
 from ray.tune.impl.config import CheckpointConfig, RunConfig
@@ -97,7 +96,8 @@ def _checkpoint_uses_rl_module(ckpt_path: Path) -> bool:
 def start_inference(env_name: str, load_checkpoint_path: str | Path, **ns3_settings: str) -> None:
     load_checkpoint_path = Path(load_checkpoint_path)
     if not load_checkpoint_path.exists():
-        raise ValueError(f"load_checkpoint_path does not exist: {load_checkpoint_path}")
+        raise ValueError(
+            f"load_checkpoint_path does not exist: {load_checkpoint_path}")
 
     # Resolve path: experiment dir with best_checkpoint/ or direct checkpoint dir
     ckpt_path = (
@@ -106,26 +106,17 @@ def start_inference(env_name: str, load_checkpoint_path: str | Path, **ns3_setti
         else load_checkpoint_path
     )
 
-    # ── Detect action masking from checkpoint before creating env ────
-    # This avoids the old pattern of creating the env, detecting masking,
-    # then creating a second env — which left stale ns-3 processes.
-    is_action_masking = False
     episode_reward = 0.0
     step_count = 0
     done = False
 
     if _checkpoint_uses_rl_module(ckpt_path):
-        # === New RLModule API stack (PPO with optional action masking) ===
+        # === New RLModule API stack (PPO) ===
         # Single-agent ID is always "agent_0" in this setup
         agent_id = "agent_0"
         module_path = ckpt_path / "learner_group" / "learner" / "rl_module" / agent_id
         module = RLModule.from_checkpoint(str(module_path))
         module.eval()
-
-        # Determine if module uses action masking by checking the loaded module type
-        is_action_masking = "ActionMasking" in type(module).__name__
-        if is_action_masking:
-            ns3_settings["useActionMasking"] = "true"
     else:
         # Old Policy API stack — need env to get agent_id for module path later
         agent_id = "agent_0"
@@ -135,11 +126,14 @@ def start_inference(env_name: str, load_checkpoint_path: str | Path, **ns3_setti
     # infer processes MUST use distinct trial names or they collide on the
     # same segment/semaphores (deadlock or corrupted init). Allow the caller
     # to set a unique one via ns3_settings.
-    env = Ns3MultiAgentEnv(
-        targetName=env_name,
-        ns3Path=NS3_HOME,
-        ns3Settings=ns3_settings,
-        trial_name=ns3_settings.get("trial_name", "inference"),
+    env = _maybe_stack(
+        Ns3MultiAgentEnv(
+            targetName=env_name,
+            ns3Path=NS3_HOME,
+            ns3Settings=_sim_settings(ns3_settings),
+            trial_name=ns3_settings.get("trial_name", "inference"),
+        ),
+        ns3_settings,
     )
     obs, info = env.reset()
     agent_id = first(obs)
@@ -150,28 +144,20 @@ def start_inference(env_name: str, load_checkpoint_path: str | Path, **ns3_setti
         while not done:
             per_agent_obs = obs[agent_id]
 
-            if is_action_masking and isinstance(per_agent_obs, dict):
-                # Build batch with action-masking format
-                obs_tensor = {
-                    k: torch.from_numpy(v).float().unsqueeze(0)
-                    if isinstance(v, np.ndarray) else v
-                    for k, v in per_agent_obs.items()
-                }
-                batch = {"obs": obs_tensor}
-            else:
-                # Flatten dict observation
-                raw_obs_space = env.observation_spaces[agent_id]
-                flat_obs = gym.spaces.flatten(raw_obs_space, per_agent_obs)
-                batch = {"obs": torch.from_numpy(flat_obs).float().unsqueeze(0)}
+            # Flatten dict observation (flat Box, Top-N: no action mask)
+            raw_obs_space = env.observation_spaces[agent_id]
+            flat_obs = gym.spaces.flatten(raw_obs_space, per_agent_obs)
+            batch = {"obs": torch.from_numpy(flat_obs).float().unsqueeze(0)}
 
             with torch.no_grad():
                 out = module.forward_inference(batch)
 
-            # Extract action (squeeze time dim if action masking produced 3D logits)
+            # Extract action (squeeze any time dim in the logits)
             logits = out["action_dist_inputs"]
             if logits.dim() == 3:
                 logits = logits.squeeze(1)
-            action = torch.argmax(logits, dim=-1).squeeze(0).cpu().numpy().item()
+            action = torch.argmax(
+                logits, dim=-1).squeeze(0).cpu().numpy().item()
             if not isinstance(action, (int, np.integer)):
                 action = int(action)
 
@@ -229,6 +215,105 @@ def start_inference(env_name: str, load_checkpoint_path: str | Path, **ns3_setti
     env.close()
 
 
+class FrameStackWrapper(gym.Wrapper):
+    """Stack the last K observations per agent into one observation vector.
+
+    Env-side stacking instead of RLlib's FrameStackingEnvToModule connector:
+    - the built-in connector asserts image-style observations (last dim == 1)
+      and zero-pads the warm-up frames; our flat Box(32) observations and
+      large-scale features (RSRP ~ -110 dBm) make both wrong here;
+    - env-side stacking is eval-symmetric: run-agent infer uses the same
+      wrapper, so training and inference see identical observations (a
+      connector would not run at inference, causing a silent mismatch).
+
+    Space remapping happens on the inner env in `_maybe_stack` (RLlib builds
+    modules from `env.unwrapped`, and gymnasium.make sets `spec` on
+    `env.unwrapped`, so the inner env must expose the stacked spaces). This
+    wrapper only performs the stacking itself. Warm-up (first K-1 steps)
+    repeats the first observation instead of zero-padding. Enabled via
+    `obsStackFrames: "K"` in ns3_settings; "1" (or unset) disables it.
+    """
+
+    def __init__(self, env, num_frames: int, raw_spaces):
+        super().__init__(env)  # gymnasium.Wrapper sets self.env
+        self.num_frames = num_frames
+        self._stack: dict[Any, deque] = {}
+        # The ORIGINAL per-agent spaces (pre-stack), used to flatten the raw
+        # per-step obs values before stacking.
+        self._spaces = raw_spaces
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        self._stack = {
+            aid: deque(
+                [self._flat(aid, o)] * self.num_frames,
+                maxlen=self.num_frames,
+            )
+            for aid, o in obs.items()
+        }
+        return self._stacked(), info
+
+    def step(self, actions):
+        obs, rew, term, trunc, info = self.env.step(actions)
+        for aid, o in obs.items():
+            self._stack[aid].append(self._flat(aid, o))
+        return self._stacked(), rew, term, trunc, info
+
+    def _flat(self, aid, o):
+        return np.asarray(gym.spaces.flatten(self._spaces[aid], o), dtype=np.float32)
+
+    def _stacked(self):
+        return {aid: np.concatenate(list(deq)) for aid, deq in self._stack.items()}
+
+    def __getattr__(self, name):
+        # gymnasium 1.3's Wrapper forwards only a fixed attribute set (spec,
+        # render_mode, metadata, spaces). Forward everything else (the
+        # MultiAgentEnv surface: observation_spaces/action_spaces,
+        # get_observation_space, possible_agents, seed, ...) to the inner env,
+        # which carries the remapped (stacked) spaces.
+        return getattr(self.env, name)
+
+
+_ENV_ONLY_SETTINGS = {"obsStackFrames", "vfShareLayers"}
+
+
+def _sim_settings(ns3_settings: dict[str, Any]) -> dict[str, Any]:
+    """Drop Python-env-only keys so they never reach the ns-3 binary CLI."""
+    return {k: v for k, v in ns3_settings.items() if k not in _ENV_ONLY_SETTINGS}
+
+
+def _maybe_stack(env, ns3_settings: dict[str, Any]):
+    """Wrap the env in FrameStackWrapper when obsStackFrames > 1, else identity.
+
+    Also remaps the inner env's observation spaces in place (Box(32) ->
+    Box(32*K), the per-agent Dict, the aggregate Dict and the single-agent
+    space) so RLlib builds the module with the stacked dim (module specs are
+    derived from `env.unwrapped` spaces) while gymnasium.make's `spec`
+    assignment on `env.unwrapped` keeps working (the wrapper stays unwrap-
+    transparent).
+    """
+    k = int(ns3_settings.get("obsStackFrames", "1"))
+    if k <= 1:
+        return env
+    # Capture the ORIGINAL per-agent spaces first (the wrapper needs them to
+    # flatten the raw per-step obs values).
+    raw_spaces = {aid: sp for aid, sp in env.observation_spaces.items()}
+    stacked = gym.spaces.Dict(
+        {
+            aid: gym.spaces.Box(
+                low=np.repeat(gym.spaces.flatten_space(sp).low, k),
+                high=np.repeat(gym.spaces.flatten_space(sp).high, k),
+                dtype=gym.spaces.flatten_space(sp).dtype,
+            )
+            for aid, sp in raw_spaces.items()
+        }
+    )
+    env.observation_spaces = stacked
+    env.observation_space = stacked
+    env.single_observation_space = gym.spaces.flatten_space(stacked)
+    return FrameStackWrapper(env, k, raw_spaces)
+
+
 def create_env(context: Any, env_name: str, ns3_settings: dict[str, Any]) -> Ns3MultiAgentEnv:
     """Env factory for both training and evaluation EnvRunners.
 
@@ -244,11 +329,14 @@ def create_env(context: Any, env_name: str, ns3_settings: dict[str, Any]) -> Ns3
     is_eval = bool(context.get("is_eval", False))
     prefix = "eval" if is_eval else "training"
     parallel = 0 if is_eval else context.worker_index
-    return Ns3MultiAgentEnv(
-        targetName=env_name,
-        ns3Path=NS3_HOME,
-        ns3Settings=ns3_settings | {"parallel": parallel},
-        trial_name=f"{prefix}{context.worker_index}_{context.vector_index}",
+    return _maybe_stack(
+        Ns3MultiAgentEnv(
+            targetName=env_name,
+            ns3Path=NS3_HOME,
+            ns3Settings=_sim_settings(ns3_settings) | {"parallel": parallel},
+            trial_name=f"{prefix}{context.worker_index}_{context.vector_index}",
+        ),
+        ns3_settings,
     )
 
 
@@ -258,22 +346,22 @@ def _build_ppo_config(
     env: Ns3MultiAgentEnv,
 ) -> AlgorithmConfig:
     """Apply PPO-specific training params."""
-    # Detect if the env uses action masking (Dict obs with action_mask key)
-    # Top-N designs use flat Box spaces without action_mask.
-    sample_obs = list(env.observation_spaces.values())[0]
-    use_action_masking = hasattr(sample_obs, "spaces") and "action_mask" in sample_obs.spaces
+    # Top-N: flat Box obs, no action mask -> default PPO Torch RL module.
+    from ray.rllib.algorithms.ppo.torch.default_ppo_torch_rl_module import DefaultPPOTorchRLModule
+    module_class = DefaultPPOTorchRLModule
 
-    # Choose RL module: ActionMaskingTorchRLModule for action masking,
-    # default PPOTorchRLModule for flat Box spaces (Top-N).
-    if use_action_masking:
-        module_class = ActionMaskingTorchRLModule
-    else:
-        from ray.rllib.algorithms.ppo.torch.default_ppo_torch_rl_module import DefaultPPOTorchRLModule
-        module_class = DefaultPPOTorchRLModule
+    # vfShareLayers (env-only setting, stripped from the ns-3 CLI by
+    # _ENV_ONLY_SETTINGS): shares the policy/critic encoder
+    # (vf_share_layers=True). MUST pair with a reduced vf_loss_coeff — the
+    # value loss otherwise drowns the shared trunk. Default False (separate
+    # encoders).
+    vf_share = str(ns3_settings.get(
+        "vfShareLayers", "false")).lower() == "true"
 
-    # base_config.clip_rewards = 1.0  # Clamp rewards to [-1, 1] for stable value function
     return (
-        base_config.training(
+        base_config
+        .resources(num_gpus=1 if HAS_GPU else 0)
+        .training(
             use_critic=True,
             use_gae=True,
             lambda_=0.95,
@@ -293,21 +381,21 @@ def _build_ppo_config(
             rl_module_spec=RLModuleSpec(
                 module_class=module_class,
                 model_config={
-                    # "use_lstm": True,
-                    # "max_seq_len": 20,
-                    # "lstm_cell_size": 256,
-                    "head_fcnet_hiddens": [256, 256],
+                    "head_fcnet_hiddens": [128, 128],
                     "head_fcnet_activation": "tanh",
-                    "vf_share_layers": False,
+                    "vf_share_layers": vf_share,
                 },
             ),
         )
     )
 
+
 def _build_sac_config(
     base_config: AlgorithmConfig,
     ns3_settings: dict[str, Any],
     env: Ns3MultiAgentEnv,
+
+
 ) -> AlgorithmConfig:
     """Apply SAC-specific training params.
 
@@ -347,6 +435,7 @@ def _build_sac_config(
         )
     )
 
+
 def _build_d3qn_config(
     base_config: AlgorithmConfig,
     ns3_settings: dict[str, Any],
@@ -378,6 +467,7 @@ def _build_d3qn_config(
             dueling=True,
         )
     )
+
 
 def _build_dqn_config(
     base_config: AlgorithmConfig,
@@ -445,10 +535,11 @@ _BUILDERS = {
     "PPO": _build_ppo_config,
     "SAC": _build_sac_config,
     "DQN": _build_dqn_config,
-    "D3QN": _build_d3qn_config,  # D3QN = DQN with double_q + dueling (RLlib default)
+    # D3QN = DQN with double_q + dueling (RLlib default)
+    "D3QN": _build_d3qn_config,
 }
 
-# Probably need to change this name to base/shared config or similar
+
 def create_example_training_config(
     env_name: str,
     max_episode_steps: int,
@@ -464,25 +555,29 @@ def create_example_training_config(
     **ns3_settings: Any,
 ) -> AlgorithmConfig:
     """!Create an example algorithm config for use with multiagent training."""
-    logger.info("max_episode_steps %s not supported for multi-agent!", max_episode_steps)
+    logger.info(
+        "max_episode_steps %s not supported for multi-agent!", max_episode_steps)
 
     # Create stats directory with timestamp
-    # Determine if action masking is used (only PPO with new API stack)
-    has_action_masking = trainable in ("PPO",)
-    ns3_settings["useActionMasking"] = str(has_action_masking).lower()
-
     if ns3_settings.get("visualize"):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        stats_dir = Path(NS3_HOME) / "contrib" / "defiance" / "examples" / "uav-handover" / "stats" / f"{trainable}_{timestamp}"
+        stats_dir = (Path(NS3_HOME) / "contrib" / "defiance" / "examples" /
+                     "uav-handover" / "stats" / f"{trainable}_{timestamp}")
         stats_dir.mkdir(parents=True, exist_ok=True)
         ns3_settings["statsDir"] = str(stats_dir)
         logger.info("Stats will be saved to: %s", stats_dir)
 
     print("[DEBUG-PY] Creating init env...", flush=True)
-    env = Ns3MultiAgentEnv(targetName=env_name, ns3Path=NS3_HOME, ns3Settings=ns3_settings.copy(), trial_name="init")
+    env = _maybe_stack(
+        Ns3MultiAgentEnv(targetName=env_name, ns3Path=NS3_HOME,
+                         ns3Settings=_sim_settings(ns3_settings.copy()),
+                         trial_name="init"),
+        ns3_settings,
+    )
     env.close()
 
-    register_env("defiance", partial(create_env, env_name=env_name, ns3_settings=ns3_settings.copy()))
+    register_env("defiance", partial(
+        create_env, env_name=env_name, ns3_settings=ns3_settings.copy()))
 
     if "policy" in training_params and training_params["policy"] == "shared":
         logger.info("started training with shared Policy")
@@ -498,42 +593,33 @@ def create_example_training_config(
             return agent_id
 
     def _env_to_module_pipeline(*_args: Any, **_kwargs: Any) -> FlattenObservations:
+        # TODO: Make PrevActionsPrevRewards work for inference as well
         return FlattenObservations(multi_agent=True)
 
     # Map trainable name to RLlib class
     rllib_trainable = trainable
     if trainable == "D3QN":
-        rllib_trainable = "DQN"  # D3QN uses RLlib's DQN (which supports double + dueling)
+        # D3QN uses RLlib's DQN (which supports double + dueling)
+        rllib_trainable = "DQN"
 
-    # Action masking: only enable if the observation space actually contains
-    # an action_mask key (i.e., ns-3 sends a Dict with action_mask).
-    # Top-N designs send a flat Box without action_mask.
-    sample_obs_space = list(env.observation_spaces.values())[0]
-    has_action_masking = (
-        trainable in ("PPO",)
-        and hasattr(sample_obs_space, "spaces")
-        and "action_mask" in sample_obs_space.spaces
-    )
-    env_kwargs = {"action_mask_key": "action_mask"} if has_action_masking else {}
+    # Top-N: flat Box obs without action_mask -> no env action-masking kwargs.
+    env_kwargs = {}
 
     env_runner_kwargs = dict(
         num_envs_per_env_runner=1,
         num_env_runners=ns3_settings["parallel"],
         create_env_on_local_worker=False,
-        # Do not create envs on the local (worker_index=0) EnvRunners. In the
-        # old API stack the local worker is only used for weights/training
-        # (sampling and eval run on remote workers), yet the RolloutWorker
-        # creates an env on it anyway unless this flag is False — each such
-        # env launches an ns-3 sim that is NEVER stepped and busy-waits
-        # forever at ~100% CPU (observed: training0_0 and eval0_0 leaks).
+        # Do not create envs on the local (worker_index=0) EnvRunner: the
+        # RolloutWorker creates an env there unless this is False, and each
+        # such env launches an ns-3 sim that is never stepped and busy-waits
+        # forever at ~100% CPU.
         create_local_env_runner=False,
         rollout_fragment_length=rollout_fragment_length or "auto",
         batch_mode="complete_episodes",
     )
     if sample_timeout_s is not None:
         env_runner_kwargs["sample_timeout_s"] = sample_timeout_s
-    if not has_action_masking:
-        env_runner_kwargs["env_to_module_connector"] = _env_to_module_pipeline
+    env_runner_kwargs["env_to_module_connector"] = _env_to_module_pipeline
 
     base_config = (
         get_trainable_cls(rllib_trainable)
@@ -551,10 +637,13 @@ def create_example_training_config(
         .multi_agent(policies=policies, policy_mapping_fn=policy_mapping_fn)
     )
 
-    # Evaluation in parallel with training, using dedicated eval EnvRunners
-    # (each runs its own ns-3 sim). Eval workers get `explore=False` (greedy/
-    # deterministic) and an `is_eval` env_config marker that create_env() uses
-    # to name the shm segment "eval..." and fix the seed offset (parallel=0).
+    # In-training evaluation is BROKEN in this RLlib stack: the eval
+    # EnvRunner's sample() never returns, so no eval metrics ever reach the
+    # results. Keep `evaluation_num_env_runners: 0` and evaluate post-training
+    # with evaluate-agent.py (the campaign workflow). Eval workers run
+    # `explore=False` (greedy) and get an `is_eval` env_config marker that
+    # create_env() uses to name the shm segment "eval..." and fix the seed
+    # offset (parallel=0).
     if evaluation_num_env_runners > 0 and evaluation_interval > 0:
         try:
             eval_duration: int | str = (
@@ -565,15 +654,14 @@ def create_example_training_config(
         except ValueError:
             eval_duration = "auto"
         base_config = base_config.evaluation(
-            evaluation_parallel_to_training=True,
+            evaluation_parallel_to_training=False,
             evaluation_num_env_runners=evaluation_num_env_runners,
             evaluation_interval=evaluation_interval,
             evaluation_duration=eval_duration,
             evaluation_duration_unit="episodes",
-            # Eval episodes legitimately take 90-400s wall under full-machine
-            # load (9 concurrent ns-3 sims). RLlib's default is 120s, which
-            # caused eval loops to break early -> NaN eval metrics on every
-            # eval after the first (see RL-AUDIT.md section 6).
+            # Eval episodes take 90-400 s wall under full-machine load;
+            # RLlib's 120 s default breaks the eval loop early -> NaN eval
+            # metrics, so this must be raised.
             evaluation_sample_timeout_s=evaluation_sample_timeout_s,
             evaluation_config={
                 "explore": False,
@@ -603,9 +691,24 @@ def create_example_training_config(
         config = config.training(**overrides)
 
     # Set shared params (properties, not .training() args)
-    config.sgd_minibatch_size = 2048
     if train_batch_size_per_learner is not None:
         config.train_batch_size_per_learner = train_batch_size_per_learner
+        # BUGFIX: `train_batch_size_per_learner` alone does not drive env
+        # sampling in this RLlib version (sampling kept the default
+        # `train_batch_size`). Bind the sampling batch explicitly (total =
+        # per-learner x num_learners). The batch must also fit
+        # parallel x steps/episode or whole-episode rounds force a 2nd
+        # sampling round (handled by __main__.py's auto-compute).
+        config.train_batch_size = train_batch_size_per_learner * (
+            config.num_learners or 1)
+    # BUGFIX: `sgd_minibatch_size` is a no-op in this RLlib version; the real
+    # field is `minibatch_size`. This fallback (only when not overridden via
+    # `-p minibatch_size=...`) keeps the minibatch in the 128-512 range and
+    # never above half the batch, preserving SGD stochasticity.
+    if "minibatch_size" not in overrides:
+        config.minibatch_size = min(
+            512, max(128, config.train_batch_size // 6)
+        )
     # Allow Ray to recreate crashed env runners as fresh actors.
     # The RLlib restart mechanism creates a new actor process (not in-place
     # actor revival), so the Ns3Env/Experiment singleton guards start clean.
@@ -627,10 +730,18 @@ def start_training(
     os.environ.setdefault("RAY_memory_usage_threshold", "0.99")
     # Reduce object store memory if needed
     os.environ.setdefault("RAY_object_store_memory_limit", "2GB")
+    # The ns-3 sims are single-threaded and memory-bound; without these caps,
+    # torch (16 default threads) and Ray steal time-slices from the sims.
+    # Cap torch/MKL threads (the MLP is tiny) and Ray's CPU budget (10 keeps
+    # the runners + learner schedulable).
+    os.environ.setdefault("OMP_NUM_THREADS", "4")
+    os.environ.setdefault("MKL_NUM_THREADS", "4")
+    os.environ.setdefault("RAY_num_cpus", "10")
 
     # D3QN is not available as a trainable, we need to specify it as DQN.
     if trainable == "D3QN":
-        trainable = "DQN"  # D3QN uses RLlib's DQN (which supports double + dueling)
+        # D3QN uses RLlib's DQN (which supports double + dueling)
+        trainable = "DQN"
 
     try:
         ray.init(num_gpus=1 if HAS_GPU else 0)
@@ -670,17 +781,22 @@ def start_training(
         logger.info("Training done!")
         eval_metric = f"{EVALUATION_RESULTS}/{ENV_RUNNER_RESULTS}/{EPISODE_RETURN_MEAN}"
         train_metric = f"{ENV_RUNNER_RESULTS}/{EPISODE_RETURN_MEAN}"
-        (Path(result.experiment_path) / "best_checkpoint").mkdir(exist_ok=True, parents=True)
+        (Path(result.experiment_path) /
+         "best_checkpoint").mkdir(exist_ok=True, parents=True)
 
         # Determine the best result – fallback if no episode returns.
         # (Single-trial runs short-circuit here and just return the trial.)
         try:
-            best_result = result.get_best_result(metric=eval_metric, mode="max")
+            best_result = result.get_best_result(
+                metric=eval_metric, mode="max")
         except RuntimeError:
-            best_result = result.get_best_result(metric=train_metric, mode="max")
+            best_result = result.get_best_result(
+                metric=train_metric, mode="max")
         if best_result is None:
-            logger.warning("No episode returns found – using last checkpoint instead.")
-            best_result = result.get_best_result(metric="training_iteration", mode="max")
+            logger.warning(
+                "No episode returns found – using last checkpoint instead.")
+            best_result = result.get_best_result(
+                metric="training_iteration", mode="max")
 
         if best_result is None:
             logger.error("No results at all – cannot save checkpoint.")
@@ -688,10 +804,10 @@ def start_training(
 
         # ── NaN-aware checkpoint selection ──────────────────────────────────
         # Prefer eval-metric checkpoints (deterministic, explore=False), but
-        # only when the eval signal is reliable. A broken final eval (NaN —
-        # e.g. eval episodes exceeding evaluation_sample_timeout_s) would make
-        # the NaN filter silently select a stale early checkpoint and discard
-        # the converged final policy (see RL-AUDIT.md section 6).
+        # only when the eval signal is reliable: a broken final eval (NaN,
+        # e.g. eval episodes exceeding evaluation_sample_timeout_s) would
+        # otherwise select a stale early checkpoint and discard the converged
+        # final policy.
         eval_ckpts: list[tuple[Any, int, float]] = []
         try:
             for ckpt, m in best_result.best_checkpoints:
@@ -746,7 +862,8 @@ def start_training(
             checkpoint.to_directory(str(checkpoint_dir))
             logger.info("Best checkpoint saved at: %s", checkpoint_dir)
         else:
-            logger.warning("No checkpoint available – training may not have produced one.")
+            logger.warning(
+                "No checkpoint available – training may not have produced one.")
 
         ray.shutdown()
 
