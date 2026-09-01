@@ -18,23 +18,28 @@ class Packet;
  *
  * Runs on the UAV node and collects:
  * - RSRP/RSRQ per cell from ReportUeMeasurements (200ms, averaged by UE PHY)
- * - Serving cell SINR (DL data SINR, EWMA-smoothed)
+ * - Serving cell SINR (DL data SINR, step-averaged over the 200 ms obs step)
  * - Serving cell ID
- * - Transport block size (DL: ReportDownlinkTbSize)
- * - UAV heading (unit vector in XZ plane) and speed
+ * - UAV heading (unit vector) and speed
  * - Time since last handover
  *
- * Observation is a flat Box vector (29 dims) wrapped in a Dict container
+ * Observation is a flat Box vector (32 dims) wrapped in a Dict container
  * (key "obs") for Send() transport compatibility with the base class API.
- * Top-5 cell ranking is computed and stored in the global g_topNCells
- * array for the ActApp.
+ * The top-3 cell ranking is computed and stored in the global g_topNCells
+ * array for the ActApp (Top-N fixed at 3: obs ranks exactly the cells the
+ * action space can hand over to).
  *
- * Observation layout (29 dims):
- *   [0] serving_rsrp, [1] serving_rsrq,
- *   [2..6] slot_rsrp[0..4], [7..11] slot_rsrq[0..4],
- *   [12..16] rsrp_delta[0..4], [17..21] rsrq_delta[0..4],
- *   [22] sinr, [23] heading_x, [24] heading_z, [25] speed,
- *   [26] tbs, [27] time_since_ho, [28] norm_goodput
+ * Observation layout (32 dims):
+ *   [0-1]   serving_rsrp / serving_rsrq
+ *   [2-4]   slot_rsrp[0..2], [5-7] rsrp_delta[0..2]
+ *   [8]     dl_sinr (mean over the 200 ms step), [9] time_since_ho,
+ *   [10] norm_goodput, [11] ho_count_10s
+ *   [12-14] ul_sinr / ul_rb_util / ul_sched_ue
+ *   [15-19] time-delta block (d_serving_rsrp/sinr/rsrq, d_norm_goodput, d_margin)
+ *   [20-22] d_slot_rsrp[0..2]
+ *   [23-25] heading_x / heading_y / heading_z
+ *   [26-28] pos_x / pos_y / pos_z (position / ISD)
+ *   [29-31] pos2s_x / pos2s_y / pos2s_z (position 2 s ahead / ISD)
  */
 class NrRlHandoverObservationApp : public ObservationApplication
 {
@@ -74,19 +79,14 @@ class NrRlHandoverObservationApp : public ObservationApplication
     void ObserveSinkRx(Ptr<const Packet> packet, const Address& from);
 
   private:
+    static constexpr uint32_t kTopN = 3;    ///< Ranked NON-serving cells (action + obs Top-N)
+
     uint32_t m_numBs;                  ///< Number of gNBs/cells in the scenario
-    uint32_t m_topN{5};                ///< Number of ranked cells in Top-N action space
     uint32_t m_stepTimeMs;             ///< Expected ReportUeMeasurements cadence in ms
     uint32_t m_uavNodeId;              ///< Node ID of the UAV (for Config paths)
 
-    // EWMA smoothing factor for serving cell SINR
-    double m_sinrEwmaAlpha{0.1};
 
-    // Emit real avg TBS at obs index 26, or a constant (0.0) when disabled.
-    // Disabling tests removing the goodput-reward-proxy feature without
-    // changing the obs layout (easy revert: set back to true).
     bool m_useTbsObservation{true};
-
     // Per-cell RSRP/RSRQ (needed for Top-N ranking)
     std::vector<double> m_rsrpValues;  ///< RSRP per cell in dBm (-140 = unknown)
     std::vector<double> m_rsrqValues;  ///< RSRQ per cell in dB  (-20 = unknown)
@@ -95,7 +95,8 @@ class NrRlHandoverObservationApp : public ObservationApplication
     uint32_t m_currentCellId{0};       ///< Current serving cell ID
     double m_servingRsrp{-140.0};      ///< Serving cell RSRP (dBm)
     double m_servingRsrq{-20.0};       ///< Serving cell RSRQ (dB)
-    double m_servingSinr{-40.0};       ///< Serving cell SINR, EWMA-smoothed (dB)
+    double m_sinrSum{0.0};            ///< Step accumulator: per-slot DL data SINR sum (dB)
+    uint32_t m_sinrCount{0};           ///< Step accumulator: DL SINR sample count
 
     // Physical layer metrics (accumulated over step)
     int64_t m_tbsSum{0};               ///< Accumulated TBS bytes over current step
@@ -104,9 +105,7 @@ class NrRlHandoverObservationApp : public ObservationApplication
     // Handover timing
     Time m_lastHandoverTime{Seconds(0)}; ///< Timestamp of last HandoverEndOk
 
-    // Windowed handover count (obs index 29: `ho_count_10s`). Mirrors the
-    // reward app's HandoverRateWindowMs so the agent can observe how close it
-    // is to the rate penalty threshold (credit assignment for the penalty).
+    // Windowed handover count (obs index 11: `ho_count_10s`).
     uint32_t m_hoRateWindowMs{10000}; ///< Sliding window for the count (ms)
     std::deque<double> m_hoTimes;     ///< Handover timestamps within the window (s)
 
@@ -144,7 +143,7 @@ class NrRlHandoverObservationApp : public ObservationApplication
     /** Compute top-N cells by RSRP and populate g_topNCells. */
     void ComputeTopNCells();
 
-    /** Build the current observation as a flat Box (29 dims), wrapped in Dict. */
+    /** Build the current observation as a flat Box (32 dims), wrapped in Dict. */
     Ptr<OpenGymDictContainer> BuildObservation();
 
     /** Send observation (called on ReportUeMeasurements batch completion). */

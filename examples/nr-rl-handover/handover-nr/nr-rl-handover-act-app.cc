@@ -54,23 +54,11 @@ NrRlHandoverActionApp::GetTypeId()
                           UintegerValue(9),
                           MakeUintegerAccessor(&NrRlHandoverActionApp::m_numBs),
                           MakeUintegerChecker<uint32_t>())
-            .AddAttribute("TopN",
-                          "Number of ranked cells for Top-N action space.",
-                          UintegerValue(5),
-                          MakeUintegerAccessor(&NrRlHandoverActionApp::m_topN),
-                          MakeUintegerChecker<uint32_t>(1, 10))
             .AddAttribute("HandoverAlgorithm",
                           "Handover algorithm: agent, a3, or noop.",
                           StringValue("agent"),
                           MakeStringAccessor(&NrRlHandoverActionApp::m_handoverAlgorithm),
-                          MakeStringChecker())
-            .AddAttribute("HandoverDebounceMs",
-                          "Minimum interval between EXECUTED handovers (ms). "
-                          "0 = disabled. 3GPP TTT analog: caps the executed "
-                          "handover rate and guarantees calm periods.",
-                          UintegerValue(0),
-                          MakeUintegerAccessor(&NrRlHandoverActionApp::m_handoverDebounceMs),
-                          MakeUintegerChecker<uint32_t>());
+                          MakeStringChecker());
     return tid;
 }
 
@@ -215,17 +203,6 @@ NrRlHandoverActionApp::ExecuteAction(uint32_t remoteAppId, Ptr<OpenGymDictContai
         return;
     }
 
-    // --- Precondition: Handover debounce (min interval between EXECUTED handovers) ---
-    if (m_handoverDebounceMs > 0 &&
-        Simulator::Now() - m_lastHandoverTime < MilliSeconds(m_handoverDebounceMs))
-    {
-        logAction("blocked-debounce");
-        NS_LOG_DEBUG("Debounce: last executed handover "
-                     << (Simulator::Now() - m_lastHandoverTime).GetMilliSeconds()
-                     << " ms ago (< " << m_handoverDebounceMs << "), skipping.");
-        return;
-    }
-
     // --- Log action ---
     if (g_logging)
     {
@@ -323,7 +300,6 @@ NrRlHandoverActionApp::ExecuteAction(uint32_t remoteAppId, Ptr<OpenGymDictContai
                 << " (actionIndex=" << actionIndex << ")");
 
     g_effectiveAction = static_cast<int>(actionIndex);
-    m_lastHandoverTime = Simulator::Now();
     g_handoverInProgress = true;
     g_nrHelper->HandoverRequest(Seconds(0), g_uavNrDevs.Get(0), sourceGnbDev, targetCellId);
     g_totalHandovers++;

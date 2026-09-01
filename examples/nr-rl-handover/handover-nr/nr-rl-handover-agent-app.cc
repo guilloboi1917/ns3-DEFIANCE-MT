@@ -5,6 +5,10 @@
 #include <cstdint>
 #include <vector>
 
+#include <string>
+
+// External globals from the scenario (defined in nr-rl-handover-scenario.cc).
+
 namespace ns3
 {
 
@@ -32,12 +36,7 @@ NrRlHandoverAgentApp::GetTypeId()
                           "Number of base stations/cells in the simulation.",
                           UintegerValue(9),
                           MakeUintegerAccessor(&NrRlHandoverAgentApp::m_numBs),
-                          MakeUintegerChecker<uint32_t>())
-            .AddAttribute("TopN",
-                          "Number of ranked cells for Top-N action space.",
-                          UintegerValue(5),
-                          MakeUintegerAccessor(&NrRlHandoverAgentApp::m_topN),
-                          MakeUintegerChecker<uint32_t>(1, 10));
+                          MakeUintegerChecker<uint32_t>());
     return tid;
 }
 
@@ -88,29 +87,39 @@ NrRlHandoverAgentApp::InitiateAction(Ptr<OpenGymDataContainer> action)
 Ptr<OpenGymSpace>
 NrRlHandoverAgentApp::GetObservationSpace()
 {
-    // Dict wrapping 28-dim Box (key "obs") to match Send() data format
+    // Dict wrapping 32-dim Box (key "obs") to match Send() data format
     auto dictSpace = CreateObject<OpenGymDictSpace>();
 
-    // serving_rsrp, serving_rsrq, slot_rsrp[0..4], rsrp_delta[0..4],
-    // d_serving_rsrp, d_serving_sinr, d_serving_rsrq, d_norm_goodput,
-    // d_margin, d_slot_rsrp[0..4], sinr, heading_x, heading_y, heading_z,
-    // tbs, time_since_ho, norm_goodput, ho_count_10s   (30 dims, see NR-RL-DESIGN.md §3)
+    //   TODO: Check explained variance when adding gNB features, serving relative position,
+    //   angle between relative uav position and bearing
+    //   [0-1] serving_rsrp/rsrq, [2-4] slot_rsrp[0..2], [5-7] rsrp_delta[0..2],
+    //   [8] dl_sinr, [9] time_since_ho, [10] norm_goodput, [11] ho_count_10s,
+    //   [12-14] ul_sinr/ul_rb_util/ul_sched_ue,
+    //   [15-19] d_serving_rsrp/sinr/rsrq, d_norm_goodput, d_margin,
+    //   [20-22] d_slot_rsrp[0..2], [23-25] heading_x/y/z,
+    //   [26-28] pos/ISD, [29-31] pos2s/ISD
     std::vector<float> low = {-160.0f, -100.0f,
-                              -160.0f, -160.0f, -160.0f, -160.0f, -160.0f,
-                              -60.0f, -60.0f, -60.0f, -60.0f, -60.0f,
+                              -160.0f, -160.0f, -160.0f,
+                              -60.0f, -60.0f, -60.0f,
+                              -40.0f, 0.0f, 0.0f, 0.0f,
+                              -40.0f, 0.0f, 0.0f,
                               -20.0f, -20.0f, -20.0f, -2.0f, -20.0f,
-                              -20.0f, -20.0f, -20.0f, -20.0f, -20.0f,
-                              -40.0f, -1.0f, -1.0f, -1.0f,
-                              0.0f, 0.0f, 0.0f, 0.0f};
+                              -20.0f, -20.0f, -20.0f,
+                              -1.0f, -1.0f, -1.0f,
+                              0.0f, 0.0f, 0.0f,
+                              0.0f, 0.0f, 0.0f};
     std::vector<float> high = {-40.0f, -3.0f,
-                               -40.0f, -40.0f, -40.0f, -40.0f, -40.0f,
-                               60.0f, 60.0f, 60.0f, 60.0f, 60.0f,
+                               -40.0f, -40.0f, -40.0f,
+                               60.0f, 60.0f, 60.0f,
+                               50.0f, 10.0f, 2.0f, 10.0f,
+                               50.0f, 1.0f, 1.0f,
                                20.0f, 20.0f, 20.0f, 2.0f, 20.0f,
-                               20.0f, 20.0f, 20.0f, 20.0f, 20.0f,
-                               50.0f, 1.0f, 1.0f, 1.0f,
-                               100000.0f, 10.0f, 2.0f, 10.0f};
+                               20.0f, 20.0f, 20.0f,
+                               1.0f, 1.0f, 1.0f,
+                               3.0f, 3.0f, 3.0f,
+                               3.0f, 3.0f, 3.0f};
 
-    std::vector<uint32_t> shape = {30};
+    std::vector<uint32_t> shape = {32};
     auto boxSpace = CreateObject<OpenGymBoxSpace>(low, high, shape, TypeNameGet<double>());
     dictSpace->Add("obs", boxSpace);
     return dictSpace;
@@ -126,37 +135,45 @@ NrRlHandoverAgentApp::GetActionSpace()
 Ptr<OpenGymDictContainer>
 NrRlHandoverAgentApp::GetResetObservation() const
 {
-    // 30-dim sentinel vector wrapped in Dict("obs")
-    auto box = MakeBoxContainer<double>(30);
-    // serving_rsrp, serving_rsrq
+    // 32-dim sentinel vector wrapped in Dict("obs")
+    auto box = MakeBoxContainer<double>(32);
+    // [0-1] serving_rsrp, serving_rsrq
     box->AddValue(-140.0);
     box->AddValue(-20.0);
-    // slot_rsrp[0..4]
-    for (uint32_t i = 0; i < 5; i++)
+    // [2-4] slot_rsrp[0..2]
+    for (uint32_t i = 0; i < 3; i++)
     {
-        box->AddValue(-140.0); // slot_rsrp
+        box->AddValue(-140.0);
     }
-    // rsrp_delta[0..4]
-    for (uint32_t i = 0; i < 5; i++)
-    {
-        box->AddValue(0.0); // rsrp_delta
-    }
-    // time-delta block: d_serving_rsrp, d_serving_sinr, d_serving_rsrq,
-    // d_norm_goodput, d_margin, d_slot_rsrp[0..4]
-    for (uint32_t i = 0; i < 10; i++)
+    // [5-7] rsrp_delta[0..2]
+    for (uint32_t i = 0; i < 3; i++)
     {
         box->AddValue(0.0);
     }
-    // sinr, heading_x, heading_y, heading_z, tbs, time_since_ho, norm_goodput
+    // [8] sinr, [9] time_since_ho, [10] norm_goodput, [11] ho_count_10s
+    box->AddValue(-40.0);
+    box->AddValue(10.0);
+    box->AddValue(0.0);
+    box->AddValue(0.0);
+    // [12-14] UL block (sentinels)
     box->AddValue(-40.0);
     box->AddValue(0.0);
     box->AddValue(0.0);
-    box->AddValue(0.0);
-    box->AddValue(0.0);
-    box->AddValue(10.0);
-    box->AddValue(0.0);
-    // ho_count_10s
-    box->AddValue(0.0);
+    // [15-19] time-delta block
+    for (uint32_t i = 0; i < 5; i++)
+    {
+        box->AddValue(0.0);
+    }
+    // [20-22] d_slot_rsrp[0..2]
+    for (uint32_t i = 0; i < 3; i++)
+    {
+        box->AddValue(0.0);
+    }
+    // [23-25] heading, [26-31] pos + pos2s (zeros; within bounds)
+    for (uint32_t i = 0; i < 9; i++)
+    {
+        box->AddValue(0.0);
+    }
 
     auto obs = CreateObject<OpenGymDictContainer>();
     obs->Add("obs", box);

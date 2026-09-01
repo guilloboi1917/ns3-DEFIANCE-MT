@@ -1,7 +1,6 @@
 #include "ns3/reward-application.h"
 
 #include <cstdint>
-#include <deque>
 #include <string>
 #include <vector>
 
@@ -15,7 +14,8 @@ class Packet;
  * @ingroup defiance
  * @brief Reward application for the NR RL handover agent (Deng-style formulation).
  *
- * Runs on the UAV node. Measures DL goodput via the PacketSink Rx trace.
+ * Runs on the UAV node. Measures goodput via the PacketSink Rx trace on the
+ * receiving node (direction given by flowDirection).
  * Reward follows Deng et al. (Paper 5) weighted KPI formulation:
  *
  *   R = alpha * R_G + (1 - alpha) * R_H
@@ -29,13 +29,16 @@ class Packet;
  *
  * Two mechanisms prevent excessive handovers:
  *
- * 1. Handover hangover: I_ho stays true for N steps after each handover
- *    (m_handoverHangoverLength, default 4). This makes the penalty persist
- *    beyond the exact step where the handover fired.
+ * 1. Decaying handover hangover: after each handover the tax weight decays
+ *    exponentially inside a window of N steps (m_handoverHangoverLength,
+ *    default 4): w = exp(-age/N), so the first hangover step carries the full
+ *    tax (w=1) and the last carries exp(-(N-1)/N). Front-loaded cost, no
+ *    cliff at the window edge, and the tax is predictable from the obs
+ *    (time_since_ho). The binary I_ho (CSV column) is 1 on the taxed steps.
  *
  * 2. Ping-pong penalty: If the agent bounces back to the cell it just left
  *    (A->B->A pattern), beta_H is multiplied by m_pingPongBetaMultiplier
- *    (default 3.0) for that step only.
+ *    (default 5.0) for that step only.
  */
 class NrRlHandoverRewardApp : public RewardApplication
 {
@@ -86,18 +89,6 @@ class NrRlHandoverRewardApp : public RewardApplication
     // --- Ping-pong detection ---
     double m_pingPongBetaMultiplier{5.0}; ///< Multiply beta_H by this on ping-pong (attribute default 5.0)
     uint32_t m_handoverHistory[3]{};      ///< Last 3 handover target cell IDs
-
-    // --- Handover-rate penalty (windowed signaling budget) ---
-    // On each handover event, count handovers within the last
-    // m_rateWindowMs; if the count exceeds m_rateBudget, multiply that step's
-    // reward by max(1 - lambda*excess, floor). The threshold structure taxes
-    // sustained churn (the attractor) while leaving sparse handovers free.
-    bool m_ratePenaltyEnabled{false}; ///< Enable the windowed rate penalty
-    uint32_t m_rateWindowMs{10000};   ///< Sliding window for the rate count (ms)
-    uint32_t m_rateBudget{2};         ///< Free handovers per window before penalizing
-    double m_ratePenaltyLambda{0.2};  ///< Marginal penalty per excess handover
-    bool m_handoverThisStep{false};   ///< A handover fired in the current step
-    std::deque<double> m_handoverTimes; ///< Handover timestamps in the sliding window (s)
 
     // --- Timing ---
     Time m_calculationInterval{MilliSeconds(200)}; ///< Reward step interval

@@ -12,7 +12,7 @@ namespace ns3
  * @brief Action application for the NR RL handover agent (Top-N design).
  *
  * Runs on the UAV node. Receives action dicts from the agent app containing
- * an "actionIndex" (0..5), maps it to a target cellId via the global
+ * an "actionIndex" (0..m_topN), maps it to a target cellId via the global
  * g_topNCells array (populated by the ObsApp each step), validates
  * preconditions, and executes the handover via g_nrHelper.
  *
@@ -39,10 +39,8 @@ class NrRlHandoverActionApp : public ActionApplication
 
   private:
     uint32_t m_numBs{9};                    ///< Number of base stations
-    uint32_t m_topN{5};                     ///< Number of ranked cells
+    uint32_t m_topN{3};                     ///< Ranked NON-serving cells (Top-N fixed at 3)
     std::string m_handoverAlgorithm;       ///< "agent" or "a3" or "noop"
-    uint32_t m_handoverDebounceMs{0};      ///< Min interval between executed handovers (ms); 0 = off
-    Time m_lastHandoverTime{Seconds(-1000.0)}; ///< Last executed handover time; never blocks the first
 };
 
 } // namespace ns3

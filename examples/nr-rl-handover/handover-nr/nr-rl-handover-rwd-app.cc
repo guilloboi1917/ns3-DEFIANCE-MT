@@ -8,11 +8,16 @@
  *   R = alpha * R_G + (1 - alpha) * R_H
  *
  *   R_G = 1 / (1 + beta_G * max(0, 1 - normGoodput))
- *   R_H = 1 / (1 + beta_H * I_ho)
+ *   R_H = 1 / (1 + beta_H * w)   with w = exp(-age / N) inside the hangover
+ *                                 window (age = steps since the handover, N =
+ *                                 rlHandoverHangoverLength), w = 0 outside
  *
  * Anti-hoofing mechanisms:
- * 1. Handover hangover: I_ho persists for N steps after each handover
- * 2. Ping-pong detection: beta_H tripled on A->B->A patterns
+ * 1. Decaying handover hangover: after each handover the tax weight decays
+ *    exponentially inside a window of N steps — cost is front-loaded (the
+ *    interruption hits right after the event), no cliff at the window edge,
+ *    and the tax is predictable from the obs (time_since_ho).
+ * 2. Ping-pong detection: beta_H multiplied on A->B->A patterns
  */
 
 #include "nr-rl-handover-rwd-app.h"
@@ -100,8 +105,11 @@ NrRlHandoverRewardApp::GetTypeId()
                           MakeDoubleAccessor(&NrRlHandoverRewardApp::m_betaHandover),
                           MakeDoubleChecker<double>(0.0))
             .AddAttribute("HandoverHangoverLength",
-                          "Number of steps the handover penalty persists after "
-                          "a handover (I_ho stays true). Default 3.",
+                          "Number of steps the handover reward penalty persists after "
+                          "a handover (decaying window). Inside the window "
+                          "the tax weight decays exponentially: w = exp(-age/N), so the "
+                          "first hangover step carries the full tax (w=1) and the last "
+                          "carries exp(-(N-1)/N). Default 4.",
                           UintegerValue(4),
                           MakeUintegerAccessor(&NrRlHandoverRewardApp::m_handoverHangoverLength),
                           MakeUintegerChecker<uint32_t>(1, 20))
@@ -111,34 +119,6 @@ NrRlHandoverRewardApp::GetTypeId()
                           DoubleValue(5.0),
                           MakeDoubleAccessor(&NrRlHandoverRewardApp::m_pingPongBetaMultiplier),
                           MakeDoubleChecker<double>(1.0))
-            .AddAttribute("HandoverRatePenaltyEnabled",
-                          "Enable the windowed handover-rate penalty: on each "
-                          "handover event, count handovers within the last "
-                          "HandoverRateWindowMs; if the count exceeds "
-                          "HandoverRateBudget, multiply that step's reward by "
-                          "max(1 - HandoverRatePenaltyLambda*excess, 0.05). "
-                          "Threshold structure taxes sustained churn (the "
-                          "attractor) while leaving sparse handovers free.",
-                          BooleanValue(false),
-                          MakeBooleanAccessor(&NrRlHandoverRewardApp::m_ratePenaltyEnabled),
-                          MakeBooleanChecker())
-            .AddAttribute("HandoverRateWindowMs",
-                          "Sliding window (ms) for the handover-rate count.",
-                          UintegerValue(10000),
-                          MakeUintegerAccessor(&NrRlHandoverRewardApp::m_rateWindowMs),
-                          MakeUintegerChecker<uint32_t>(100, 600000))
-            .AddAttribute("HandoverRateBudget",
-                          "Free handovers per window before the rate penalty "
-                          "applies (budget for the signaling cost).",
-                          UintegerValue(2),
-                          MakeUintegerAccessor(&NrRlHandoverRewardApp::m_rateBudget),
-                          MakeUintegerChecker<uint32_t>(0, 100))
-            .AddAttribute("HandoverRatePenaltyLambda",
-                          "Marginal reward penalty per excess handover in the "
-                          "window: R_rate = max(1 - lambda*excess, 0.05).",
-                          DoubleValue(0.2),
-                          MakeDoubleAccessor(&NrRlHandoverRewardApp::m_ratePenaltyLambda),
-                          MakeDoubleChecker<double>(0.0, 10.0))
             .AddAttribute("RewardComposition",
                           "Reward combination: 'additive' = alpha*R_G + (1-alpha)*R_H "
                           "(constant baseline on calm steps, handover tax capped at "
@@ -251,16 +231,6 @@ NrRlHandoverRewardApp::ObserveHandover(const uint64_t imsi,
     m_handoverHistory[0] = m_handoverHistory[1];
     m_handoverHistory[1] = m_handoverHistory[2];
     m_handoverHistory[2] = cellId;
-
-    // Record the handover in the sliding window (for the rate penalty).
-    double now = Simulator::Now().GetSeconds();
-    double windowSec = m_rateWindowMs / 1000.0;
-    m_handoverTimes.push_back(now);
-    while (!m_handoverTimes.empty() && m_handoverTimes.front() < now - windowSec)
-    {
-        m_handoverTimes.pop_front();
-    }
-    m_handoverThisStep = true;
 }
 
 void
@@ -355,10 +325,14 @@ NrRlHandoverRewardApp::SendReward()
         R_G = 1.0 / (1.0 + m_betaGoodput * gap);
     }
 
-    // --- 5. Handover indicator with hangover ---
+    // --- 5. Handover indicator with decaying hangover ---
+    double hoWeight = 0.0;
+    // Sampled before the decrement so I_ho covers the full window (last step too).
     bool hoActive = (m_handoverHangoverSteps > 0);
     if (m_handoverHangoverSteps > 0)
     {
+        uint32_t age = m_handoverHangoverLength - m_handoverHangoverSteps;
+        hoWeight = std::exp(-static_cast<double>(age) / m_handoverHangoverLength);
         m_handoverHangoverSteps--;
     }
 
@@ -379,10 +353,10 @@ NrRlHandoverRewardApp::SendReward()
         effectiveBeta *= m_pingPongBetaMultiplier;
     }
     double I_ho = hoActive ? 1.0 : 0.0;
-    double R_H = 1.0 / (1.0 + effectiveBeta * I_ho);
+    double R_H = 1.0 / (1.0 + effectiveBeta * hoWeight);
 
     // --- 8. Combined reward ---
-    // additive (default): R = alpha*R_G + (1-alpha)*R_H — a constant (1-alpha)
+    // additive: R = alpha*R_G + (1-alpha)*R_H — a constant (1-alpha)
     //   baseline on calm steps (policy-invariant in fixed-length episodes) and a
     //   handover tax capped at (1-alpha) per hangover step.
     // multiplicative:     R = R_G * R_H — no baseline; the handover tax scales
@@ -391,33 +365,6 @@ NrRlHandoverRewardApp::SendReward()
     double reward = (m_rewardComposition == "multiplicative")
                         ? R_G * R_H
                         : m_alphaGoodput * R_G + (1.0 - m_alphaGoodput) * R_H;
-
-    // --- 8b. Handover-rate penalty (windowed signaling budget) ---
-    // Applied on the step where a handover fired, once per event: count
-    // handovers in the sliding window (including this one); if above the
-    // budget, discount the step reward by max(1 - lambda*excess, floor).
-    // The factor lands in this step's reward so the agent attributes it to
-    // the handover decision; the obs feature `ho_count_10s` makes the window
-    // count observable (required for credit assignment).
-    double ratePenaltyFactor = 1.0;
-    uint32_t hoCountWindow = 0;
-    if (m_ratePenaltyEnabled && m_handoverThisStep)
-    {
-        double now = Simulator::Now().GetSeconds();
-        double windowSec = m_rateWindowMs / 1000.0;
-        while (!m_handoverTimes.empty() && m_handoverTimes.front() < now - windowSec)
-        {
-            m_handoverTimes.pop_front();
-        }
-        hoCountWindow = static_cast<uint32_t>(m_handoverTimes.size());
-        if (hoCountWindow > m_rateBudget)
-        {
-            double excess = static_cast<double>(hoCountWindow - m_rateBudget);
-            ratePenaltyFactor = std::max(1.0 - m_ratePenaltyLambda * excess, 0.05);
-            reward *= ratePenaltyFactor;
-        }
-    }
-    m_handoverThisStep = false;
 
     // --- 9. TBS throughput (logging only) ---
     if (!m_tbsHistory.empty())
