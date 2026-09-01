@@ -145,26 +145,6 @@ build_lib_example(
 )
 
 build_lib_example(
-        NAME defiance-uav-handover
-        SOURCE_FILES
-                uav-handover/uav-handover-scenario.cc
-                uav-handover/uav-handover-action-application.cc
-                uav-handover/uav-handover-agent-application.cc
-                uav-handover/uav-handover-observation-application.cc
-                uav-handover/uav-handover-reward-application.cc
-        HEADER_FILES
-                uav-handover/uav-handover-action-application.h
-                uav-handover/uav-handover-agent-application.h
-                uav-handover/uav-handover-observation-application.h
-                uav-handover/uav-handover-reward-application.h
-        LIBRARIES_TO_LINK
-                ${libapplications}
-                ${libinternet}
-                ${liblte}
-                ${libdefiance}
-)
-
-build_lib_example(
         NAME defiance-tcp-harl
         SOURCE_FILES
                 harl-tcp-prototype/harl-tcp-scenario.cc
