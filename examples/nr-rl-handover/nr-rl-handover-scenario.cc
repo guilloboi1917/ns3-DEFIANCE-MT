@@ -1,5 +1,5 @@
 #include "ns3/core-module.h"
-#include "ns3/flow-monitor-helper.h" // Remove later for RL learning
+#include "ns3/flow-monitor-helper.h"
 #include "ns3/network-module.h"
 #include "ns3/mobility-module.h" // Waypoint for the g_uavWaypoints plan (needed before the globals)
 #include "ns3/nr-module.h"
@@ -7,9 +7,10 @@
 using namespace ns3;
 
 double ueSpeed = 20.0;            // m/s
-double simDuration = 30.0;        // seconds
-uint32_t bandwidthMhz = 20;        // MHz (10 = fast iteration, halve RBs)
-double trafficRateMbps = 100.0;   // UAV OnOff data rate (Mbps)
+double simDuration = 50.0;        // seconds
+uint32_t bandwidthMhz = 10;        // MHz
+uint32_t numerology = 0;           // 0 = 15 kHz SCS, 1 = 30 kHz SCS
+double trafficRateMbps = 50.0;   // UAV OnOff data rate (Mbps)
 double intersiteDistance = 500.0; // m
 uint32_t numMacroCells = 7;       // number of macro cells
 double gnbDowntilt = 10.0;        // degrees
@@ -24,35 +25,31 @@ double endHeight = 200.0;  // m (max Z for random-waypoint)
 uint32_t bbrWindowLength = 10;
 uint32_t g_addInterferingUes = 0;
 double g_aerialUeRatio = 0.0;
+std::string g_interfererMobility = "static";
 bool g_logging = false;
 bool rlMode = false;
 std::string handoverAlgorithm = "a3";
-uint32_t stepTime = 200; // ms (aligned with ReportUeMeasurements filter period)
+uint32_t stepTime = 400; // ms (observation cadence)
 uint32_t delay = 0;      // ms
-double handoverPenalty = 0.01;
 double rlAlphaGoodput = 0.8;              ///< Deng-style: weight for goodput term [0,1]
 double rlBetaGoodput = 5.0;              ///< Deng-style: goodput sensitivity
-double rlBetaHandover = 60.0;             ///< Deng-style: handover sensitivity
-std::string rlRewardComposition = "additive"; ///< Reward combination: additive | multiplicative
+double rlBetaHandover = 5.0;             ///< Deng-style: handover sensitivity
+std::string rlRewardComposition = "multiplicative"; ///< Reward combination: additive | multiplicative
 double rlPingPongMultiplier = 5.0;            ///< betaHandover multiplier on A->B->A ping-pong
-uint32_t rlHandoverHangoverLength = 4;        ///< Reward tax duration (steps) per handover event
-bool rlHandoverRatePenalty = false;           ///< Windowed handover-rate (signaling budget) penalty
-uint32_t rlHandoverRateWindowMs = 10000;      ///< Sliding window for the rate count (ms)
-uint32_t rlHandoverRateBudget = 2;            ///< Free handovers per window before penalizing
-double rlHandoverRateLambda = 0.2;            ///< Marginal penalty per excess handover in the window
-double rlRewardRefMbps = 40.0;                ///< Reward/obs goodput reference (Mbps): normG = goodput/ref
+uint32_t rlHandoverHangoverLength = 1;        ///< Reward tax duration (steps) per handover event
+uint32_t rlHandoverRateWindowMs = 10000;      ///< Sliding window for the ho_count_10s obs count (ms)
+double rlRewardRefMbps = 15.0;                ///< Reward/obs goodput reference (Mbps): normG = goodput/ref
 std::string rlRewardGoodputShape = "compl_pwr";   ///< R_G shape: deng | linear | exp_decay | compl_pwr
 double rlRewardGoodputAlpha = 3.0;            ///< exp_decay rate
 double rlRewardGoodputP = 0.4;                ///< compl_pwr exponent
 uint32_t rlcTxBufferBytes = 180000;          ///< RLC TX buffer cap (0 = unlimited)
 std::string errorModel = "eesm-ir-t1";       ///< PHY error model: eesm-ir-t1 (default) | eesm-ir-t2 | eesm-cc-t2 | eesm-cc-t1 | lte-mi
-uint32_t channelUpdateMs = 50;               ///< channel UpdatePeriod ms (0 = disabled; 50 ms default: 50 ms x 20 m/s = 1 m, matching the spatial-consistency step)
+uint32_t channelUpdateMs = 20;               ///< channel UpdatePeriod ms (0 = disabled/module default; larger periods decorrelate the fading and square-wave the obs SINR)
 std::string channelModel = "umav";          ///< channel: umav (3GPP TR 38.901 UMa-AV, default) | tworay (TwoRaySpectrumPropagationLossModel)
-std::string g_flowDirection = "dl";
+std::string g_flowDirection = "ul";
 std::string g_transportProtocol = "udp";
 uint32_t g_senderNodeId = 0;     //!< Node ID running OnOff (varies by flowDirection)
 uint32_t g_receiverNodeId = 0;   //!< Node ID running PacketSink (varies by flowDirection)
-double handoverMargin = -5.0;
 int parallel = 0;
 std::string outputDirCli;   // overrides default output directory
 
@@ -114,10 +111,6 @@ using namespace ns3;
 #include <string>
 #include <vector>
 
-/**
- * Some descriptions here
- */
-
 int
 main(int argc, char* argv[])
 {
@@ -125,8 +118,11 @@ main(int argc, char* argv[])
     cmd.AddValue("ueSpeed", "Speed of the UAV in m/s", ueSpeed);
     cmd.AddValue("simDuration", "Duration of the simulation in seconds", simDuration);
     cmd.AddValue("bandwidthMhz",
-                 "Carrier bandwidth in MHz (20 default; 10 halves RBs for fast iteration",
+                 "Carrier bandwidth in MHz (10 default; 20 doubles RBs)",
                  bandwidthMhz);
+    cmd.AddValue("numerology",
+                 "Numerology (0 = 15 kHz SCS, 1 = 30 kHz SCS; n78 typical)",
+                 numerology);
     cmd.AddValue("trafficRateMbps",
                  "UAV OnOff data rate in Mbps (default 100; below link capacity the rate "
                  "becomes the goodput ceiling and idle slots appear)",
@@ -166,6 +162,9 @@ main(int argc, char* argv[])
     cmd.AddValue("aerialUeRatio",
                  "Fraction of ground UEs placed at aerial height (0=all ground, 1=all aerial)",
                  g_aerialUeRatio);
+    cmd.AddValue("interfererMobility",
+                 "Interferer mobility: static (hover in place, default) | waypoint (random flight)",
+                 g_interfererMobility);
     cmd.AddValue("logging", "Enable CSV file logging (disable for RL training)", g_logging);
     cmd.AddValue("rlMode",
                  "Enable RL training mode (installs RL apps, disables FlowMonitor/CSV)",
@@ -175,9 +174,6 @@ main(int argc, char* argv[])
                  "Step time in ms between RL agent decisions (only used with rlMode)",
                  stepTime);
     cmd.AddValue("delay", "Transmission delay (ms) for Simple Channel between apps", delay);
-    cmd.AddValue("handoverPenalty",
-                 "Reward penalty per handover in normalized [0,1] units",
-                 handoverPenalty);
     cmd.AddValue("rlAlphaGoodput",
                  "Deng-style reward: weight for goodput term [0,1]. "
                  "1-alpha is the handover penalty weight.",
@@ -203,28 +199,15 @@ main(int argc, char* argv[])
                  "a handover (I_ho stays true). Default 4. Halving (2) halves "
                  "the per-handover reward tax.",
                  rlHandoverHangoverLength);
-    cmd.AddValue("rlHandoverRatePenalty",
-                 "Enable the windowed handover-rate (signaling budget) penalty: "
-                 "on each handover event, handovers within the last "
-                 "rlHandoverRateWindowMs are counted; above rlHandoverRateBudget "
-                 "the step reward is multiplied by max(1 - lambda*excess, 0.05).",
-                 rlHandoverRatePenalty);
     cmd.AddValue("rlHandoverRateWindowMs",
-                 "Sliding window (ms) for the handover-rate penalty and the "
-                 "ho_count_10s observation dimension.",
+                 "Sliding window (ms) for the ho_count_10s observation dimension.",
                  rlHandoverRateWindowMs);
-    cmd.AddValue("rlHandoverRateBudget",
-                 "Free handovers per window before the rate penalty applies.",
-                 rlHandoverRateBudget);
-    cmd.AddValue("rlHandoverRateLambda",
-                 "Marginal reward penalty per excess handover in the window.",
-                 rlHandoverRateLambda);
     cmd.AddValue("rlRewardRefMbps",
                  "Goodput reference for normalized goodput (normG = goodput/ref) "
                  "in Mbps. Affects both the reward (R_G) and the obs norm_goodput "
                  "feature: too low saturates normG at 1 (flat R_G), too high pins "
                  "it in the flat low region. Near the achievable throughput "
-                 "(~40 Mbps) restores the gradient (RL-AUDIT.md §6).",
+                 "(~40 Mbps) restores the gradient.",
                  rlRewardRefMbps);
     cmd.AddValue("rlRewardGoodputShape",
                  "R_G functional shape: deng (inverse, beta_G steepness), "
@@ -246,8 +229,8 @@ main(int argc, char* argv[])
                  "eesm-cc-t1 | lte-mi (NrLteMiErrorModel)",
                  errorModel);
     cmd.AddValue("channelUpdateMs",
-                 "Channel UpdatePeriod in ms (0 = disabled, module default; 50 default: "
-                 "50 ms x 20 m/s = 1 m spatial-consistency step)",
+                 "Channel UpdatePeriod in ms (0 = disabled, module default; 20 default: "
+                 "50 ms gave square-wave SINR)",
                  channelUpdateMs);
     cmd.AddValue("channelModel",
                  "Channel model: umav (3GPP TR 38.901 UMa-AV, default) | tworay "
@@ -262,10 +245,6 @@ main(int argc, char* argv[])
     cmd.AddValue("transportProtocol",
                  "Transport protocol: tcp (OnOff+PacketSink) or udp (OnOff+PacketSink)",
                  g_transportProtocol);
-    cmd.AddValue("handoverMargin",
-                 "RSRP margin for handover (3GPP range, ~1dB/step). "
-                 "Target RSRP must > serving + margin. -999 disables.",
-                 handoverMargin);
     cmd.AddValue("parallel", "Number of parallel simulation runs", parallel);
     cmd.AddValue("outputDir", "Output directory for CSV files (overrides default)", outputDirCli);
     cmd.Parse(argc, argv);
@@ -317,23 +296,19 @@ main(int argc, char* argv[])
                   bbrWindowLength,
                   g_addInterferingUes,
                   g_aerialUeRatio,
+                  g_interfererMobility,
                   g_logging,
                   rlMode,
                   handoverAlgorithm,
                   stepTime,
                   delay,
-                  handoverPenalty,
-                  handoverMargin,
                   rlAlphaGoodput,
                   rlBetaGoodput,
                   rlBetaHandover,
                   rlRewardComposition,
                   rlPingPongMultiplier,
                   rlHandoverHangoverLength,
-                  rlHandoverRatePenalty,
                   rlHandoverRateWindowMs,
-                  rlHandoverRateBudget,
-                  rlHandoverRateLambda,
                   rlRewardRefMbps,
                   rlRewardGoodputShape,
                   rlRewardGoodputAlpha,
@@ -341,12 +316,12 @@ main(int argc, char* argv[])
                   rlcTxBufferBytes,
                   errorModel,
                   channelUpdateMs,
+                  numerology,
                   channelModel,
                   outputDirCli);
 
-    // FlowMonitor: install BEFORE Simulator::Run() so it can observe the flows
-    // (2026-08-13: previously installed after Run, leaving nr-rl.flowmonitor
-    // empty). Serialization stays after Run to capture the final per-flow stats.
+    // Install before Simulator::Run() so the flows are observed; serialize
+    // after Run to capture the final per-flow stats.
     FlowMonitorHelper flowmonHelper;
     if (g_logging)
     {

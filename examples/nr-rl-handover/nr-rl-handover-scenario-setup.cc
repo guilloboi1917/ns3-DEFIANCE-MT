@@ -3,9 +3,10 @@
  * Supports multiple topologies:
  *   "simple"  — 2 gNodeBs on a line, UAV shuttles between them
  *   "triangle" — 3 sites, 3 sectors each
- *   "hexgrid" — hexagonal grid of 3-sector macro sites, UAV follows ascend-random or
- * random-waypoint 1 aerial UE, 1 remote server. The UE runs a TCP/UDP OnOffApplication to the
- * remote server (BulkSend was removed — it floods the NR MAC at line rate).
+ *   "hexgrid" — hexagonal grid of 3-sector macro sites
+ *
+ * 1 aerial UE, 1 remote server. The UE runs a TCP/UDP OnOffApplication to the
+ * remote server.
  */
 
 #include "handover-nr/nr-rl-handover-act-app.h"
@@ -99,13 +100,8 @@ NotifyTcpStateChange(const TcpSocket::TcpStates_t oldState, const TcpSocket::Tcp
 }
 
 // ------------------------------------------------------------------------- //
-// Persistent CSV streams. The trace loggers fire thousands of times per
-// second; opening a fresh std::ofstream (open + flush + close syscalls, plus
-// a g_outputDir string concat) per event was the dominant part of the logging
-// overhead (perf 2026-08-13: logging=true costs ~+37% walltime vs off, +2.3 s
-// sys for a 20 s sim). Each CSV now opens ONCE on first use and appends for
-// the rest of the run (std::endl still flushes per line — same durability as
-// before). See REHYDRATION §3h2.
+// Persistent CSV streams: each file opens once on first use and appends for
+// the rest of the run (per-event open/close dominated the logging overhead).
 // ------------------------------------------------------------------------- //
 namespace
 {
@@ -154,24 +150,6 @@ CongestionStateLogger(TcpSocketState::TcpCongState_t oldState,
 
     std::ofstream& congFile = LogStream("nr-rl-congestion.csv");
     congFile << Simulator::Now().GetSeconds() << "," << oldName << "," << newName << "\n";
-}
-
-// HARQ feedback logger — fires when UE sends ACK/NACK on PUCCH/PUSCH
-void
-HarqFeedbackLogger(SfnSf sfn,
-                   uint16_t cellId,
-                   uint16_t rnti,
-                   uint8_t bwpId,
-                   uint8_t harqId,
-                   uint32_t k1Delay)
-{
-    if (!g_logging)
-    {
-        return;
-    }
-    std::ofstream& harqFile = LogStream("nr-rl-harq.csv");
-    harqFile << Simulator::Now().GetSeconds() << "," << cellId << "," << (uint32_t)rnti << ","
-             << (uint32_t)bwpId << "," << (uint32_t)harqId << "," << k1Delay << "\n";
 }
 
 // SlotDataStats logger — per-slot RB utilization (serving cell only)
@@ -364,8 +342,8 @@ HandoverError(const uint64_t imsi, const uint16_t cellId, const uint16_t rnti)
     g_handoverInProgress = false;
 }
 
-// Log ReportUeMeasurements (200ms, averaged, dBm/dB, all cells)
-// This is the same trace source used by the obs app.
+// Log ReportUeMeasurements (averaged, dBm/dB, all cells) — the same trace
+// source used by the obs app.
 void
 LogUeMeasReport(uint16_t rnti,
                 uint16_t cellId,
@@ -423,12 +401,11 @@ UlRxPacketLogger(uint16_t cellId, RxPacketTraceParams params)
     }
 }
 
-// DL RX packet logger (UE spectrum PHY, post-beamforming MIMO SINR) — the DL
-// mirror of nr-rl-ul-rx-sinr.csv (2026-08-13). Same RxPacketTraceParams schema:
-// t, cellId, rnti, sinrDb, mcs, tbSize, corrupt, tbler. cellId is the serving
-// cell at TB time (g_currentCellId — the UE's serving cell changes on handover).
-// Source: RxPacketTraceUe on the UE's NrSpectrumPhy (same trace family as the
-// gNB's RxPacketTraceGnb used for the UL).
+// DL RX packet logger (UE spectrum PHY, post-beamforming MIMO SINR) - the DL
+// mirror of nr-rl-ul-rx-sinr.csv. Same schema: t, cellId, rnti, sinrDb, mcs,
+// tbSize, corrupt, tbler; cellId is the serving cell at TB time
+// (g_currentCellId - changes on handover). Source: RxPacketTraceUe on the UE's
+// NrSpectrumPhy.
 void
 DlRxPacketLogger(RxPacketTraceParams params)
 {
@@ -443,24 +420,17 @@ DlRxPacketLogger(RxPacketTraceParams params)
     }
 }
 
-// UL SINR logged to ul_sinr_srs.csv
+// UL SINR logged to ul_sinr_srs.csv. The trace fires from the UL DATA CQI
+// report (GenerateDataCqiReport -> pData chunk) — despite the "srs" name it
+// carries the full-band per-RB SINR spectrum, time-averaged by the
+// NrChunkProcessor (the same SINR the scheduler uses for UL CQI/MCS
+// selection). RBs not used by the UL transmission sit at the -40 dB sentinel,
+// so the average covers only the RBs with a real SINR (> 1e-12).
 //
-// Fires from GenerateDataCqiReport in NrGnbPhy, which is connected to the
-// pData chunk processor (UL DATA SINR).  The SINR is time-averaged by the
-// NrChunkProcessor.  This is the same SINR that the scheduler uses for UL
-// CQI / MCS selection.
-//
-// NOTE: When gNBs share the exact same position (e.g., co-located sectors
+// NOTE: when gNBs share the exact same position (e.g., co-located sectors
 // without antenna offset), the channel model produces NaN Doppler values,
 // which causes all SINR entries to be NaN and get clamped to -40 dB.
 // Always apply a small (>= 1 m) antenna offset between co-located gNBs.
-//
-// FIX (2026-08-13): this trace (despite the "srs" name) fires from the UL
-// DATA CQI report (GenerateDataCqiReport -> pData chunk) and carries the
-// FULL-BAND per-RB SINR spectrum. RBs not used by the UL transmission sit at
-// the -40 dB sentinel and dragged the average down by ~20 dB under light UL
-// load (verified: per-TB SINR 21.5 dB vs logged 1.7 dB at 17% UL utilization).
-// The average now covers only the RBs with a real SINR (> 1e-12).
 void
 UlSrsSinrLogger(uint16_t cellId,
                 uint64_t imsi,
@@ -498,8 +468,7 @@ UlSrsSinrLogger(uint16_t cellId,
 // UL SINR capture (always on): RB-averaged UL SINR per slot ->
 // g_lastSinrValues[cellId] (latest) and the per-cell step accumulators
 // g_ulSinrSum/g_ulSinrCount (mean over the obs step, reset by the obs app).
-// Same full-band fix as UlSrsSinrLogger (2026-08-13): average only RBs with a
-// real SINR, not the -40 idle sentinels.
+// Same full-band fix as UlSrsSinrLogger: average only RBs with a real SINR.
 void
 CaptureUlSrsSinr(uint16_t cellId, uint64_t /* imsi */, SpectrumValue& sinrSpectrum, SpectrumValue& /* interference */)
 {
@@ -547,19 +516,6 @@ CaptureSlotDataStats(const SfnSf& /* sfn */,
                             : 0.0;
 }
 
-// UE TX power logger
-void
-ReportUeTxPower(uint16_t cellId, uint16_t rnti, double powerDbm)
-{
-    if (!g_logging)
-    {
-        return;
-    }
-    std::ofstream& txPowerFile = LogStream("ue_tx_power.csv");
-    txPowerFile << Simulator::Now().GetSeconds() << "," << cellId << "," << rnti << "," << powerDbm
-                << "\n";
-}
-
 void
 UavPeriodicPositionLog()
 {
@@ -575,34 +531,6 @@ UavPeriodicPositionLog()
     }
     // Re-schedule every 500ms
     Simulator::Schedule(MilliSeconds(500), &UavPeriodicPositionLog);
-}
-
-void
-SimHeartbeatLog()
-{
-    static int beatCount = 0;
-    beatCount++;
-    std::cout << "[HEARTBEAT #" << beatCount << "] t=" << Simulator::Now().GetSeconds()
-              << "s cellId=" << g_currentCellId << " hoCount=" << g_totalHandovers
-              << " nEvents=" << Simulator::GetEventCount()
-              << " hoInProgress=" << g_handoverInProgress << "\n";
-    Simulator::Schedule(Seconds(1.0), &SimHeartbeatLog);
-}
-
-void
-WatchdogLog()
-{
-    static int wdCount = 0;
-    wdCount++;
-    if (wdCount <= 30 || wdCount % 10 == 0) // first 30 every 100ms, then every 1s
-    {
-        std::cout << "[WATCHDOG " << wdCount << "] t=" << Simulator::Now().GetSeconds()
-                  << "s nEvents=" << Simulator::GetEventCount() << "\n";
-    }
-    if (wdCount < 100) // stop after 10s sim time
-    {
-        Simulator::Schedule(MilliSeconds(100), &WatchdogLog);
-    }
 }
 
 void
@@ -729,13 +657,13 @@ AddUavWaypoint(Ptr<WaypointMobilityModel> mob, Time t, const Vector& p)
 /**
  * @brief Install the UAV mobility model and generate its waypoint plan.
  *
- * Consolidation of the per-topology duplicated blocks (2026-08-12). The plan
- * depends ONLY on (seed, runId): the waypoint RNGs are pinned to fixed streams
- * (100/101/102) so rlMode must not shift the waypoints (trajectory isolation
- * for the matched A3-vs-RL comparison). Draw ORDER is preserved per topology:
- * hexgrid/triangle draw the start position from rbx/rby (randomStart=true);
- * simple uses a centered start (no start draws). Do NOT reorder the draws —
- * that would change every trajectory and invalidate all baselines.
+ * The plan depends ONLY on (seed, runId): the waypoint RNGs are pinned to
+ * fixed streams (100/101/102) so rlMode must not shift the waypoints
+ * (trajectory isolation for the matched A3-vs-RL comparison). Draw ORDER is
+ * preserved per topology: hexgrid/triangle draw the start position from
+ * rbx/rby (randomStart=true); simple uses a centered start (no start draws).
+ * Do NOT reorder the draws — that would change every trajectory and
+ * invalidate all baselines.
  *
  * @param uav UAV node
  * @param bbox movement bounding box
@@ -781,9 +709,8 @@ InstallUavMobility(Ptr<Node> uav,
     Ptr<UniformRandomVariable> rbz = CreateObject<UniformRandomVariable>();
     rbz->SetAttribute("Min", DoubleValue(startHeight));
     rbz->SetAttribute("Max", DoubleValue(endHeight));
-    // Trajectory isolation (matched A3-vs-RL comparison): pin the UAV waypoint
-    // RNGs to fixed streams so the plan depends ONLY on (seed, runId) —
-    // rlMode must not shift the waypoints (2026-08-11).
+    // Pin the UAV waypoint RNGs to fixed streams so the plan depends only on
+    // (seed, runId) — rlMode must not shift the waypoints (trajectory isolation).
     rbx->SetStream(100);
     rby->SetStream(101);
     rbz->SetStream(102);
@@ -843,11 +770,11 @@ InstallUavMobility(Ptr<Node> uav,
 // ------------------------------------------------------------------------- //
 inline void
 scenarioSetup(std::string flowDirection = "ul",
-              std::string transportProtocol = "tcp",
+              std::string transportProtocol = "udp",
               double ueSpeed = 20.0,            // m/s
-              double simDuration = 80.0,        // seconds
-              uint32_t bandwidthMhz = 20,       // MHz (10 = fast iteration)
-              double trafficRateMbps = 100.0,   // UAV OnOff data rate (Mbps)
+              double simDuration = 50.0,        // seconds
+              uint32_t bandwidthMhz = 10,       // MHz
+              double trafficRateMbps = 50.0,   // UAV OnOff data rate (Mbps)
               double intersiteDistance = 500.0, // m
               uint32_t numMacroCells = 7,       // number of macro sites
               double gnbDowntilt = 10.0,        // degrees
@@ -857,35 +784,32 @@ scenarioSetup(std::string flowDirection = "ul",
               std::string tcpVariant = "TcpBbr",
               std::string uavMobility = "random-waypoint",
               std::string topology = "triangle",
-              double startHeight = 80.0,
-              double endHeight = 300.0,
+              double startHeight = 50.0,
+              double endHeight = 200.0,
               uint32_t bbrWindowLength = 10,
               uint32_t addInterferingUes = 0,
               double aerialUeRatio = 0.0,
-              bool logging = true,
+              std::string interfererMobility = "static",
+              bool logging = false,
               bool rlMode = false,
               std::string handoverAlgorithm = "a3",
-              uint32_t stepTime = 200,
+              uint32_t stepTime = 400,
               uint32_t delay = 0,
-              double handoverPenalty = 0.1,
-              double handoverMargin = 3.0,
               double rlAlphaGoodput = 0.8,
               double rlBetaGoodput = 5.0,
-              double rlBetaHandover = 60.0,
-              const std::string& rlRewardComposition = "additive",
+              double rlBetaHandover = 5.0,
+              const std::string& rlRewardComposition = "multiplicative",
               double rlPingPongMultiplier = 5.0,
-              uint32_t rlHandoverHangoverLength = 4,
-              bool rlHandoverRatePenalty = false,
+              uint32_t rlHandoverHangoverLength = 1,
               uint32_t rlHandoverRateWindowMs = 10000,
-              uint32_t rlHandoverRateBudget = 2,
-              double rlHandoverRateLambda = 0.2,
-              double rlRewardRefMbps = 40.0,
-              std::string rlRewardGoodputShape = "deng",
+              double rlRewardRefMbps = 15.0,
+              std::string rlRewardGoodputShape = "compl_pwr",
               double rlRewardGoodputAlpha = 3.0,
               double rlRewardGoodputP = 0.4,
               uint32_t rlcTxBufferBytes = 180000, // RLC TX buffer cap (0 = unlimited)
               std::string errorModel = "eesm-ir-t1", // eesm-ir-t1 | eesm-ir-t2 | eesm-cc-t2 | eesm-cc-t1 | lte-mi
-              uint32_t channelUpdateMs = 50,       // channel UpdatePeriod (0 = disabled/module default; 50 default: 50 ms x 20 m/s = 1 m step)
+              uint32_t channelUpdateMs = 20,       // channel UpdatePeriod ms (0 = disabled/module default)
+              uint32_t numerology = 0,             // 0 = 15 kHz SCS, 1 = 30 kHz SCS (n78 typical)
               std::string channelModel = "umav",   // channel: umav (3GPP UMa-AV, default) | tworay (TwoRaySpectrumPropagationLossModel)
               std::string outputDir = "")
 {
@@ -938,12 +862,10 @@ scenarioSetup(std::string flowDirection = "ul",
             {"sink-packets.csv",     "time,packetSizeBytes"},
             {"source-packets.csv",   "time,packetSizeBytes"},
             {"retransmissions.csv",  "time,packetSizeBytes"},
-            {"ue_tx_power.csv",      "time,cellId,rnti,txPowerDbm"},
             {"rl_obs.csv",           "time,serving_rsrp,serving_rsrq,slot_rsrp_0,slot_rsrp_1,slot_rsrp_2,rsrp_delta_0,rsrp_delta_1,rsrp_delta_2,dl_sinr,time_since_ho,norm_goodput,ho_count_10s,ul_sinr,ul_rb_util,ul_sched_ue,d_serving_rsrp,d_serving_sinr,d_serving_rsrq,d_norm_goodput,d_margin_best,d_slot_rsrp_0,d_slot_rsrp_1,d_slot_rsrp_2,heading_x,heading_y,heading_z,pos_x,pos_y,pos_z,pos2s_x,pos2s_y,pos2s_z"},
             {"rl_reward.csv",        "time,goodputMbps,dynRefMbps,dynMinMbps,normGoodputRaw,normGoodput,R_G,I_ho,R_H,pingPong,reward"},
             {"rl_action.csv",        "time,currentCellId,targetCellId,srcRsrpDbm,targetRsrpDbm"},
             {"rl_actions_full.csv",  "time,actionIndex,targetCellId,currentCellId,outcome"},
-            {"nr-rl-harq.csv",       "time,cellId,rnti,bwpId,harqId,k1Delay"},
             {"nr-rl-congestion.csv", "time,oldState,newState"},
             {"nr-rl-slot-stats.csv", "time,cellId,scheduledUe,usedReg,usedSym,availableRb,availableSym,utilPct"},
             {"nr-rl-rlf.csv",        "time,cellId"},
@@ -987,18 +909,13 @@ scenarioSetup(std::string flowDirection = "ul",
         metaOut << "handoverAlgorithm: " << handoverAlgorithm << "\n";
         metaOut << "stepTime: " << stepTime << "\n";
         metaOut << "delay: " << delay << "\n";
-        metaOut << "handoverMargin: " << handoverMargin << "\n";
-        metaOut << "handoverPenalty: " << handoverPenalty << "\n";
         metaOut << "rlAlphaGoodput: " << rlAlphaGoodput << "\n";
         metaOut << "rlBetaGoodput: " << rlBetaGoodput << "\n";
         metaOut << "rlBetaHandover: " << rlBetaHandover << "\n";
         metaOut << "rlRewardComposition: " << rlRewardComposition << "\n";
         metaOut << "rlPingPongMultiplier: " << rlPingPongMultiplier << "\n";
         metaOut << "rlHandoverHangoverLength: " << rlHandoverHangoverLength << "\n";
-        metaOut << "rlHandoverRatePenalty: " << (rlHandoverRatePenalty ? "true" : "false") << "\n";
         metaOut << "rlHandoverRateWindowMs: " << rlHandoverRateWindowMs << "\n";
-        metaOut << "rlHandoverRateBudget: " << rlHandoverRateBudget << "\n";
-        metaOut << "rlHandoverRateLambda: " << rlHandoverRateLambda << "\n";
         metaOut << "rlRewardRefMbps: " << rlRewardRefMbps << "\n";
         metaOut << "rlRewardGoodputShape: " << rlRewardGoodputShape << "\n";
         metaOut << "rlRewardGoodputAlpha: " << rlRewardGoodputAlpha << "\n";
@@ -1014,36 +931,34 @@ scenarioSetup(std::string flowDirection = "ul",
     g_nrHelper->SetBeamformingHelper(idealBeamformingHelper);
     g_nrHelper->SetEpcHelper(g_nrEpcHelper);
 
-    // --- Spectrum: one band @ 3.5 GHz, bandwidthMhz MHz (default 20), 1 CC, 1 BWP, numerology 0 --- //
-    // Some common values from Switzerland //
-    // Subcarrier spacing = 1 (numerology)
-    // Bandwidth 100MHz matching ~n78 5G Band name
-    // Center frequency 3.5GHz
-    // However for faster iteration, use a smaller bandwidth and numerology
+    // --- Spectrum: one band @ 3.5 GHz, bandwidthMhz MHz (default 10), 1 CC, 1 BWP --- //
+    // Subcarrier spacing from CLI --numerology (0 = 15 kHz, 1 = 30 kHz).
+    // 3.5 GHz matches n78 (FR1); 100 MHz is the full n78 deployment, smaller
+    // bandwidths iterate faster. Numerology affects the PRB count per MHz
+    // (15 kHz: 52 PRB @ 10 MHz; 30 kHz: 24 PRB @ 10 MHz) and slot duration.
     const double centralFrequency = 3.5e9; // 3.5 GHz (FR1)
     const double bandwidth = bandwidthMhz * 1e6; // e.g. 20 MHz (106 RBs) or 10 MHz (52 RBs)
-    const uint16_t numerology = 0;         // 15 kHz SCS
     CcBwpCreator ccBwpCreator;
     CcBwpCreator::SimpleOperationBandConf bandConf(centralFrequency, bandwidth, 1);
     OperationBandInfo band = ccBwpCreator.CreateOperationBandContiguousCc(bandConf);
 
     // --- Channel: 3GPP TR 38.901 UMa (Urban Macro), default LOS condition --- //
-    // CLI --channelUpdateMs: 50 default (50 ms x 20 m/s = 1 m spatial-consistency
-    // step); 0 disables the spatial-consistency / LOS-NLOS evolution (the module
-    // default = frozen realization). CLI --channelModel=tworay swaps in
-    // TwoRaySpectrumPropagationLossModel: drops the 3GPP CHANNEL MATRIX machinery
-    // (GenSpectrumChannelMatrix + UpdatePeriod spatial consistency + MIMO spatial
-    // correlation — the dominant radio cost, REHYDRATION §3h2). NOTE: the TwoRay
-    // model DOES keep a phased-array beamforming gain (array response x BF
-    // vector, NLOS penalty x1/19) and FTR small-scale fading + LOS corrections —
-    // what goes away is the matrix, not beamforming/fading. The physics differ
-    // though (UMa condition model, FTR fading): median DL SINR 11 vs 25 dB —
-    // benchmark-only unless deliberately chosen.
+    // CLI --channelUpdateMs: 0 disables the spatial-consistency / LOS-NLOS
+    // evolution (module default = frozen realization). At 20 ms the per-update
+    // displacement is ~1 m at 20 m/s (~12 lambda at 3.5 GHz); larger update
+    // periods decorrelate the fast fading between updates and produce
+    // square-wave obs SINR. CLI --channelModel=tworay swaps in
+    // TwoRaySpectrumPropagationLossModel: it drops the 3GPP CHANNEL MATRIX
+    // machinery (GenSpectrumChannelMatrix + UpdatePeriod spatial consistency +
+    // MIMO spatial correlation — the dominant radio cost) but KEEPS the
+    // phased-array beamforming gain (array response x BF vector, NLOS penalty
+    // x1/19) and FTR small-scale fading + LOS corrections — what goes away is
+    // the matrix, not beamforming/fading. The physics differ (UMa condition
+    // model, FTR fading) — benchmark-only unless deliberately chosen.
     if (channelModel == "tworay")
     {
-        // UMa-AV with the TwoRay spectrum model: the two-ray model now accepts
-        // the UMa-AV scenario (its FTR fading aliases the UMa calibration;
-        // the condition + propagation models stay UMa-AV via the helper).
+        // The two-ray model accepts the UMa-AV scenario (FTR fading aliases
+        // the UMa calibration; condition + propagation stay UMa-AV via the helper).
         g_nrChannelHelper->ConfigureFactories("UMa-AV", "Default", "TwoRay");
     }
     else
@@ -1060,15 +975,12 @@ scenarioSetup(std::string flowDirection = "ul",
     // --- Scheduler, error model, beamforming --- //
     // 5G NR DL is OFDMA by design; a TDMA scheduler (one UE per slot, whole
     // band) under-utilizes the band and inflates full-band interference from
-    // neighbor cells. Switched from NrMacSchedulerTdmaPF to OfdmaPF 2026-08-12:
-    // multiple UEs share each slot on disjoint RBGs — the UAV keeps the band
-    // most slots while sparse 1 Mbps interferers take a few RBGs.
+    // neighbor cells. OFDMA lets multiple UEs share each slot on disjoint RBGs.
     g_nrHelper->SetSchedulerTypeId(TypeId::LookupByName("ns3::NrMacSchedulerOfdmaPF"));
     // PHY error model (CLI --errorModel): NR EESM HARQ-CC/IR x MCS Table 1/2
     // (Table 2 = 256-QAM up to MCS 27, aggressive; Table 1 = 64-QAM, robust)
     // or LTE-MI (NrLteMiErrorModel, the module default). Default eesm-ir-t1
-    // (MCS Table 1 / 64-QAM): measured ~60% more UL goodput than Table 2 under
-    // the volatile UAV channel (RL-AUDIT §10).
+    // (MCS Table 1 / 64-QAM), robust under the volatile UAV channel.
     std::string errorModelType = "ns3::NrEesmIrT2";
     if (errorModel == "eesm-ir-t1")
         errorModelType = "ns3::NrEesmIrT1";
@@ -1085,6 +997,12 @@ scenarioSetup(std::string flowDirection = "ul",
         TypeIdValue(TypeId::LookupByName("ns3::DirectPathQuasiOmniBeamforming")));
 
     // --- Handover algorithm ---
+    // The RL observation cadence is driven by the UE PHY's ReportUeMeasurements
+    // trace, so the L1 filter period is aligned with stepTime for stepTime to
+    // genuinely control the RL decision cadence. A3 handover decisions also use
+    // these reports, so a larger stepTime coarsens the A3 baseline cadence too.
+    Config::SetDefault("ns3::NrUePhy::UeMeasurementsFilterPeriod",
+                       TimeValue(MilliSeconds(stepTime)));
     if (handoverAlgorithm == "agent" || rlMode)
     {
         g_nrHelper->SetHandoverAlgorithmType("ns3::NrNoOpHandoverAlgorithm");
@@ -1093,8 +1011,7 @@ scenarioSetup(std::string flowDirection = "ul",
     else if (handoverAlgorithm == "a3")
     {
         g_nrHelper->SetHandoverAlgorithmType("ns3::NrA3RsrpHandoverAlgorithm");
-        // Use default hysteresis for A3 (handoverMargin is for the RL agent's action gate)
-        double a3Hysteresis = 3.0;
+        double a3Hysteresis = 3.0;  // hardcoded A3 hysteresis
         g_nrHelper->SetHandoverAlgorithmAttribute("Hysteresis", DoubleValue(a3Hysteresis));
         g_nrHelper->SetHandoverAlgorithmAttribute("TimeToTrigger", TimeValue(MilliSeconds(256)));
         Config::SetDefault("ns3::NrUePhy::EnableRlfDetection", BooleanValue(true));
@@ -1143,19 +1060,19 @@ scenarioSetup(std::string flowDirection = "ul",
     Config::SetDefault("ns3::NrUePowerControl::Alpha", DoubleValue(0.7));
     Config::SetDefault("ns3::NrUePowerControl::PoNominalPusch", IntegerValue(-80));
     Config::SetDefault("ns3::NrUePowerControl::PoUePusch", IntegerValue(0));
-    // Use fixed TDD pattern instead of all-Flexible (default). The all-Flexible
-    // pattern causes "Cannot TX while RX" crashes when the scheduler independently
-    // assigns UL grants and DL data to the same UE in Flexible slots.
+    // Fixed TDD pattern instead of the all-Flexible default, which crashes
+    // ("Cannot TX while RX") when UL grants and DL data are scheduled for the
+    // same UE in Flexible slots. msg="gNB transmission overlaps in time with UE transmission. CellId:5", +16.401071429s 9 file=contrib/nr/model/nr-spectrum-phy.cc, line=1239
     Config::SetDefault("ns3::NrGnbPhy::Pattern", StringValue("DL|S|UL|UL|DL|DL|S|UL|UL|DL|"));
 
     // --- PHY configuration --- //
     g_nrHelper->SetGnbPhyAttribute("Numerology", UintegerValue(numerology));
     g_nrHelper->SetGnbPhyAttribute("TxPower",
-                                   DoubleValue(23.0)); // This was too high before at 46? db
+                                   DoubleValue(23.0));
     g_nrHelper->SetUePhyAttribute("TxPower", DoubleValue(23.0));
-    g_nrHelper->SetUePhyAttribute("NoiseFigure", DoubleValue(9.0));
 
-    // --- RLC UM buffer size (matches legacy LTE setting from original prototype) --- //
+
+    // --- RLC buffer size --- //
     Config::SetDefault("ns3::NrRlcUm::MaxTxBufferSize", UintegerValue(rlcTxBufferBytes));
     Config::SetDefault("ns3::NrRlcAm::MaxTxBufferSize", UintegerValue(rlcTxBufferBytes)); // parity for TCP (AM)
 
@@ -1576,10 +1493,9 @@ scenarioSetup(std::string flowDirection = "ul",
 
         g_interferingUeContainer.Create(addInterferingUes);
 
-        // Interference-regime isolation (2026-08-12): pin the interferer RNGs
-        // so their trajectories depend only on (seed, runId, UE index) — the
-        // same fix as the UAV's SetStream(100-102). Unpinned RNGs draw from the
-        // shared auto-assigned stream, so upstream consumption-order shifts
+        // Pin the interferer RNGs so their trajectories depend only on
+        // (seed, runId, UE index). Unpinned RNGs draw from the shared
+        // auto-assigned stream, so upstream consumption-order shifts
         // (e.g. rlMode on/off between A3 baselines and RL evals) would silently
         // move the interferers. Stream 110 = start positions (prefix-stable:
         // adding interferers extends the draw sequence without moving UE 0..N-1);
@@ -1598,9 +1514,14 @@ scenarioSetup(std::string flowDirection = "ul",
                                   ? (50.0 + interferingUeRng->GetValue() * 250.0)
                                   : 1.5;
 
-            if (ueHeight > 1.5)
+            // Aerial interfering UE: random waypoint flight only in
+            // interfererMobility="waypoint"; the default "static" hovers the
+            // interferers at their start positions (deterministic spatial
+            // interference field — a function of the UAV's position, which is
+            // in the obs). Waypoint streams 111+2i/112+2i are drawn only in
+            // waypoint mode; start positions always use stream 110.
+            if (ueHeight > 1.5 && interfererMobility == "waypoint")
             {
-                // Aerial interfering UE: RandomWaypoint via WaypointMobilityModel
                 Ptr<WaypointMobilityModel> wpMob = CreateObject<WaypointMobilityModel>();
                 g_interferingUeContainer.Get(i)->AggregateObject(wpMob);
                 double dwellTime = 2.0;
@@ -1634,12 +1555,13 @@ scenarioSetup(std::string flowDirection = "ul",
             }
             else
             {
-                // Ground interfering UE: ConstantPosition (static at starting location)
+                // Ground UE or static aerial UE: ConstantPosition at the
+                // starting location (aerial height for static aerial).
                 MobilityHelper groundMob;
                 groundMob.SetMobilityModel("ns3::ConstantPositionMobilityModel");
                 groundMob.Install(g_interferingUeContainer.Get(i));
                 g_interferingUeContainer.Get(i)->GetObject<MobilityModel>()->SetPosition(
-                    Vector(x, y, 1.5));
+                    Vector(x, y, ueHeight));
             }
         }
 
@@ -1692,11 +1614,7 @@ scenarioSetup(std::string flowDirection = "ul",
         }
     }
 
-    // Add measurement configuration
-    // Removed: LTE measurement report config, not needed for NR
-    // NR uses periodic RRC measurement reports (UE PHY ReportUeMeasurements)
-    // (240ms cadence, matching MS240)
-    // cadence)
+    // NR uses periodic RRC measurement reports (UE PHY ReportUeMeasurements).
 
     uint16_t dlPort = 50000;
     Ptr<Node> uav = g_uavContainer.Get(0);
@@ -1745,11 +1663,9 @@ scenarioSetup(std::string flowDirection = "ul",
     const double onOffDataRateBps = onOffDataRateMbps * 1e6;
 
     // Reward/obs goodput reference (Mbps) — SEPARATE from the traffic rate.
-    // normGoodput = goodput / ref. With actual goodput ~5-34 Mbps, a 100Mbps
-    // reference pins normG in the flat low region of the Deng inverse
-    // (R_G = 1/(1+beta*(1-normG))), destroying reward differentiation across
-    // cells. Setting the reference near the achievable throughput (~40 Mbps)
-    // restores the gradient (RL-AUDIT.md §6, normG analysis 2026-08-04).
+    // normGoodput = goodput / ref. A reference far above the achieved goodput
+    // pins normG in the flat low region of the Deng inverse
+    // (R_G = 1/(1+beta*(1-normG))), destroying reward differentiation across cells.
     const double rewardRefMbps = rlRewardRefMbps;
     const double rewardRefBps = rewardRefMbps * 1e6;
 
@@ -1808,6 +1724,12 @@ scenarioSetup(std::string flowDirection = "ul",
 
             Config::ConnectWithoutContext(senderTcpBasePath + "CongState",
                                           MakeCallback(&CongestionStateLogger));
+
+            // The app starts at 1.0 s and the handshake usually completes before
+            // the State trace attaches here, so ESTABLISHED is never observed and
+            // the RTT guard would discard every sample. Mark the connection
+            // established explicitly; the State trace stays as fallback.
+            g_tcpConnected = true;
         });
 
         if (logging)
@@ -1944,12 +1866,8 @@ scenarioSetup(std::string flowDirection = "ul",
         {
             Ptr<NrUePhy> uePhy = NrHelper::GetUePhy(ueNetDev, 0);
             Ptr<NrUePowerControl> powerCtrl = uePhy->GetUplinkPowerControl();
-            powerCtrl->TraceConnectWithoutContext("ReportPuschTxPower",
-                                                  MakeCallback(&ReportUeTxPower));
-            uePhy->TraceConnectWithoutContext("UePhyTxedHarqFeedbackTrace",
-                                              MakeCallback(&HarqFeedbackLogger));
-            // DL per-TB RX trace (RxPacketTraceUe) — DL mirror of the UL
-            // nr-rl-ul-rx-sinr.csv (2026-08-13)
+            // DL per-TB RX trace (RxPacketTraceUe) — DL mirror of
+            // nr-rl-ul-rx-sinr.csv
             Ptr<NrSpectrumPhy> ueSpectrumPhy = uePhy->GetSpectrumPhy();
             if (ueSpectrumPhy)
             {
@@ -1988,10 +1906,6 @@ scenarioSetup(std::string flowDirection = "ul",
         rlAppHelper.SetAttribute("BetaHandover", DoubleValue(rlBetaHandover));
         rlAppHelper.SetAttribute("PingPongBetaMultiplier", DoubleValue(rlPingPongMultiplier));
         rlAppHelper.SetAttribute("HandoverHangoverLength", UintegerValue(rlHandoverHangoverLength));
-        rlAppHelper.SetAttribute("HandoverRatePenaltyEnabled", BooleanValue(rlHandoverRatePenalty));
-        rlAppHelper.SetAttribute("HandoverRateWindowMs", UintegerValue(rlHandoverRateWindowMs));
-        rlAppHelper.SetAttribute("HandoverRateBudget", UintegerValue(rlHandoverRateBudget));
-        rlAppHelper.SetAttribute("HandoverRatePenaltyLambda", DoubleValue(rlHandoverRateLambda));
         rlAppHelper.SetAttribute("RewardComposition", StringValue(rlRewardComposition));
         rlAppHelper.SetAttribute("RewardGoodputShape", StringValue(rlRewardGoodputShape));
         rlAppHelper.SetAttribute("RewardGoodputAlpha", DoubleValue(rlRewardGoodputAlpha));
