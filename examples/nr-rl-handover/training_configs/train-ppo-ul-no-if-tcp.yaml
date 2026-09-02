@@ -1,7 +1,12 @@
+# TCP-training variant of train-ppo-ul-no-if: transport swap only (obs
+# and reward design unchanged; the 100 Mbps cap just makes TCP full-buffer).
+# beta_H 1.0 (UDP canonical was 5 -> ~3 handovers, over-suppresses; 0.1 was
+# invisible -> 15.2 handovers vs A3's 8.4 at eval). At beta 1.0 each hangover
+# step loses 50% of that step's goodput reward (ping-pong: 83%).
 type: train
 env_name: defiance-nr-rl-handover
 trainable: PPO
-iterations: 60
+iterations: 100
 max_episode_steps: 100    # informational for multi-agent
 checkpoint_path: null
 rollout_fragment_length: null
@@ -29,7 +34,7 @@ ns3_settings:
   topology: triangle
   rlMode: "true"
   handoverAlgorithm: agent
-  transportProtocol: udp
+  transportProtocol: tcp
   flowDirection: ul
   addInterferingUes: "0"
   aerialUeRatio: "1.0"
@@ -38,7 +43,7 @@ ns3_settings:
   obsStackFrames: "2"      # stack 2 obs frames -> 64 dims
   rlAlphaGoodput: "0.8"
   rlBetaGoodput: "5"
-  rlBetaHandover: "5"
+  rlBetaHandover: "1.0"
   rlRewardComposition: multiplicative
   rlPingPongMultiplier: "5"
   rlHandoverHangoverLength: "1"

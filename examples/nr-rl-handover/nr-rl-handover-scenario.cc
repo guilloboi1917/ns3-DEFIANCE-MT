@@ -8,8 +8,8 @@ using namespace ns3;
 
 double ueSpeed = 20.0;            // m/s
 double simDuration = 50.0;        // seconds
-uint32_t bandwidthMhz = 10;        // MHz
-uint32_t numerology = 0;           // 0 = 15 kHz SCS, 1 = 30 kHz SCS
+uint32_t bandwidthMhz = 30;        // MHz
+uint32_t numerology = 1;           // 0 = 15 kHz SCS, 1 = 30 kHz SCS
 double trafficRateMbps = 50.0;   // UAV OnOff data rate (Mbps)
 double intersiteDistance = 500.0; // m
 uint32_t numMacroCells = 7;       // number of macro cells
@@ -253,17 +253,9 @@ main(int argc, char* argv[])
 
     if (rlMode)
     {
-        // RL mode requires UDP (TCP RL is not validated with the current
-        // obs/reward design). flowDirection may be dl or ul: the obs carries
-        // both a DL (UE data SINR, -40 in UL-only flows) and an UL block
-        // (gNB SRS SINR + load, -40/0 in DL-only flows); the reward goodput
-        // tracks the sink on g_receiverNodeId (direction-correct).
-        if (g_transportProtocol != "udp")
-        {
-            NS_FATAL_ERROR("RL mode requires --transportProtocol=udp (got "
-                           << g_transportProtocol << ")");
-        }
-
+        // Both transports are valid in RL mode: the reward/obs goodput is
+        // fed by the PacketSink Rx trace (transport-agnostic), and RLC AM
+        // (TCP) vs UM (UDP) is chosen by the scenario setup.
         OpenGymMultiAgentInterface::Get();
         Ns3AiMsgInterface::Get()->SetTrialName(trialName);
         std::cout << "RL mode: trial_name=" << trialName << " seed=" << seed << " runId=" << runId

@@ -1,0 +1,46 @@
+# nr-rl-handover-a3-baseline-30mhz-tcp-ul.yaml — A3 baseline (TCP, UL), no
+# interference variant. Controlled comparison cell for the TCP agent evals
+# (agent-eval-ul-*-tcp, trained at 30 MHz n1): same cell and offered load,
+# 20 seeds, pinned RNG streams for per-seed pairing: 30 MHz n1, triangle,
+# ISD 500 m, random-waypoint 50-200 m @ 20 m/s, UMa-AV 20 ms, eesm-ir-t1,
+# TCP UL, near-capacity 35 Mbps (above the ~33 Mbps ceiling), 50 s.
+#
+# Run:
+#   python3 contrib/defiance/examples/nr-rl-handover/run-evaluations.py \
+#       contrib/defiance/examples/nr-rl-handover/evaluation-scenarios/baseline/nr-rl-handover-a3-baseline-30mhz-tcp-ul.yaml \
+#       --jobs 5 --analyze
+
+evaluation:
+  name: "nr-rl-handover-a3-baseline-30mhz-tcp-ul"
+  mode: a3
+  n_seeds: 20
+  sim_time: 50
+
+  common:
+    topology: triangle
+    intersiteDistance: 500
+    uavMobility: random-waypoint
+    ueSpeed: 20
+    startHeight: 50
+    endHeight: 200
+    bandwidthMhz: 30
+    numerology: 1
+    errorModel: eesm-ir-t1
+    channelUpdateMs: 20
+    trafficRateMbps: 35         # near-capacity load (measured 30 MHz n1 UL ceiling ~33 Mbps)
+    rlRewardRefMbps: 35       # informational (A3 runs no RL apps); matches the agent evals
+
+  scenarios:
+    - tag: "tcp-ul-no-if"
+      algorithm: a3
+      flowDirection: ul
+      addInterferingUes: 0
+      aerialUeRatio: 0.0
+      transportProtocol: tcp
+
+    - tag: "tcp-ul-if"
+      algorithm: a3
+      flowDirection: ul
+      addInterferingUes: 4
+      aerialUeRatio: 1.0
+      transportProtocol: tcp

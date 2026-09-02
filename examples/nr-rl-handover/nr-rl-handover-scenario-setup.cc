@@ -84,8 +84,8 @@ NotifyTcpStateChange(const TcpSocket::TcpStates_t oldState, const TcpSocket::Tcp
     const char* oldName = TcpSocket::TcpStateName[oldState];
     const char* newName = TcpSocket::TcpStateName[newState];
 
-    std::cout << "TCP state: " << oldName << " -> " << newName
-              << " at t=" << Simulator::Now().GetSeconds() << "s" << "\n";
+    // std::cout << "TCP state: " << oldName << " -> " << newName
+    //           << " at t=" << Simulator::Now().GetSeconds() << "s" << "\n";
 
     if (newState == TcpSocket::ESTABLISHED)
     {
@@ -145,8 +145,8 @@ CongestionStateLogger(TcpSocketState::TcpCongState_t oldState,
     const char* oldName = TcpSocketState::TcpCongStateName[oldState];
     const char* newName = TcpSocketState::TcpCongStateName[newState];
 
-    std::cout << "TCP congestion: " << oldName << " -> " << newName
-              << " at t=" << Simulator::Now().GetSeconds() << "s" << "\n";
+    // std::cout << "TCP congestion: " << oldName << " -> " << newName
+    //           << " at t=" << Simulator::Now().GetSeconds() << "s" << "\n";
 
     std::ofstream& congFile = LogStream("nr-rl-congestion.csv");
     congFile << Simulator::Now().GetSeconds() << "," << oldName << "," << newName << "\n";
@@ -277,23 +277,18 @@ TcpRateSampleChange(const TcpRateOps::TcpRateSample& sample)
              << "\n";
 }
 
-// Track handovers
+// Track handovers. Connected to the UAV's RRC only (UAV-specific Config
+// path), so no imsi filter is needed.
 void
-UavRrcStateChange(std::string context,
-                  uint64_t imsi,
+UavRrcStateChange(uint64_t imsi,
                   uint16_t cellId,
                   uint16_t rnti,
                   NrUeRrc::State oldState,
                   NrUeRrc::State newState)
 {
-    // Only log for UAV UE
-    if (imsi != 1)
-    {
-        return;
-    }
-    std::cout << "RRC state change for UE " << imsi << ", RNTI " << rnti << " to cell " << cellId
-              << " (state " << oldState << " -> " << newState << ") at time "
-              << Simulator::Now().GetSeconds() << "s" << "\n";
+    // std::cout << "RRC state change for UE " << imsi << ", RNTI " << rnti << " to cell " << cellId
+    //           << " (state " << oldState << " -> " << newState << ") at time "
+    //           << Simulator::Now().GetSeconds() << "s" << "\n";
     g_currentRnti = rnti;
     g_currentCellId = cellId;
 
@@ -945,9 +940,10 @@ scenarioSetup(std::string flowDirection = "ul",
     // --- Channel: 3GPP TR 38.901 UMa (Urban Macro), default LOS condition --- //
     // CLI --channelUpdateMs: 0 disables the spatial-consistency / LOS-NLOS
     // evolution (module default = frozen realization). At 20 ms the per-update
-    // displacement is ~1 m at 20 m/s (~12 lambda at 3.5 GHz); larger update
-    // periods decorrelate the fast fading between updates and produce
-    // square-wave obs SINR. CLI --channelModel=tworay swaps in
+    // displacement is 0.4 m at 20 m/s (~5 lambda at 3.5 GHz); at 50 ms it hits
+    // 1 m — the model's consistency limit — and the frozen staircase aliases
+    // the ~2 m-scale multipath fading into a two-level square-wave SINR.
+    // CLI --channelModel=tworay swaps in
     // TwoRaySpectrumPropagationLossModel: it drops the 3GPP CHANNEL MATRIX
     // machinery (GenSpectrumChannelMatrix + UpdatePeriod spatial consistency +
     // MIMO spatial correlation — the dominant radio cost) but KEEPS the
@@ -965,6 +961,10 @@ scenarioSetup(std::string flowDirection = "ul",
     {
         Config::SetDefault("ns3::ThreeGppChannelModel::UpdatePeriod",
                            TimeValue(MilliSeconds(channelUpdateMs)));
+        // Moving-scatterer Doppler (TR 37.885 Sec. 6.2.3): random per-cluster
+        // speed in [-vScatt, vScatt] on the reflected paths. 20 m/s ~ urban
+        // ground-traffic speeds; doubles the UT Doppler at 20 m/s.
+        Config::SetDefault("ns3::ThreeGppChannelModel::vScatt", DoubleValue(20.0));
         g_nrChannelHelper->ConfigureFactories("UMa-AV", "Default", "ThreeGpp");
         g_nrChannelHelper->SetChannelConditionModelAttribute("UpdatePeriod",
                                                              TimeValue(MilliSeconds(channelUpdateMs)));
@@ -1079,6 +1079,16 @@ scenarioSetup(std::string flowDirection = "ul",
     // Reduce TCP MinRTO from RFC 6298 default (1s) to Linux standard (200ms)
     // to recover faster from handover-induced packet loss.
     Config::SetDefault("ns3::TcpSocketBase::MinRto", TimeValue(MilliSeconds(200)));
+
+    // TCP socket buffers sized above the BDP (~0.4 MB at the ~80 ms
+    // saturation RTT and the 50 Mbps link); the 128 KB ns-3 default would
+    // cap the transport at ~13 Mbps, making it buffer-limited instead of
+    // radio-limited.
+    if (transportProtocol == "tcp")
+    {
+        Config::SetDefault("ns3::TcpSocket::SndBufSize", UintegerValue(1 << 20));
+        Config::SetDefault("ns3::TcpSocket::RcvBufSize", UintegerValue(1 << 20));
+    }
 
     // --- BWP routing --- //
     BandwidthPartInfoPtrVector allBwps = CcBwpCreator::GetAllBwps({band});
@@ -1457,6 +1467,15 @@ scenarioSetup(std::string flowDirection = "ul",
         g_nrHelper->AttachToGnb(g_uavNrDevs.Get(0), g_gnbNrDevs.Get(0));
     }
 
+    // The attach helper runs at t=0 (scheduled, not synchronous), so the
+    // UAV's serving cell is only known once the simulation starts. Seed the
+    // tracked cell at 1.1 s (before UL traffic at ~1.2 s) so the
+    // serving-cell filters (ul_sinr_srs.csv, nr-rl-slot-stats.csv) log from
+    // the first PUSCH instead of waiting for the first handover.
+    Simulator::Schedule(Seconds(1.1), []() {
+        g_currentCellId = g_uavNrDevs.Get(0)->GetObject<NrUeNetDevice>()->GetCellId();
+    });
+
     // Dump gNB antenna positions/orientations once (topology fully set up)
     if (logging)
     {
@@ -1703,9 +1722,9 @@ scenarioSetup(std::string flowDirection = "ul",
             auto ueDev = uav->GetDevice(0)->GetObject<NrUeNetDevice>();
             auto rrc = ueDev->GetRrc();
             auto ipv4 = uav->GetObject<Ipv4>();
-            std::cout << "DEBUG t=" << Simulator::Now().GetSeconds()
-                      << " rrcState=" << rrc->GetState() << " cellId=" << rrc->GetCellId()
-                      << " ueIp=" << ipv4->GetAddress(1, 0).GetLocal() << "\n";
+            // std::cout << "DEBUG t=" << Simulator::Now().GetSeconds()
+            //           << " rrcState=" << rrc->GetState() << " cellId=" << rrc->GetCellId()
+            //           << " ueIp=" << ipv4->GetAddress(1, 0).GetLocal() << "\n";
         });
 
         // Schedule metric-accumulating traces (always connected, regardless of logging)
@@ -1877,9 +1896,9 @@ scenarioSetup(std::string flowDirection = "ul",
         }
     });
 
-    Config::Connect("/NodeList/*/DeviceList/*/$ns3::NrNetDevice/$ns3::NrUeNetDevice/NrUeRrc"
-                    "/StateTransition",
-                    MakeCallback(&UavRrcStateChange));
+    Config::ConnectWithoutContext("/NodeList/" + std::to_string(uavNodeId) +
+                                      "/DeviceList/*/NrUeRrc/StateTransition",
+                                  MakeCallback(&UavRrcStateChange));
 
     // Add X2 Interface (already added inside hexgrid block)
     if (topology == "simple")

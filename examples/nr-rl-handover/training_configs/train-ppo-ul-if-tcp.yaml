@@ -1,7 +1,12 @@
+# TCP-training variant of train-ppo-ul-if: transport swap only (obs and
+# reward design unchanged; the 100 Mbps cap just makes TCP full-buffer).
+# Low-beta experiment: rlBetaHandover 0.1 (was 5) removes the handover tax
+# so the policy must be shaped by the intrinsic TCP goodput penalty
+# (congestion-controller dips) — see docs/CURRENT-NEXT-STEPS.md.
 type: train
 env_name: defiance-nr-rl-handover
 trainable: PPO
-iterations: 60
+iterations: 100
 max_episode_steps: 100    # informational for multi-agent
 checkpoint_path: null
 rollout_fragment_length: null
@@ -29,16 +34,16 @@ ns3_settings:
   topology: triangle
   rlMode: "true"
   handoverAlgorithm: agent
-  transportProtocol: udp
+  transportProtocol: tcp
   flowDirection: ul
-  addInterferingUes: "0"
+  addInterferingUes: "4"
   aerialUeRatio: "1.0"
   interfererMobility: "static"
   stepTime: "400"          # 400 ms step: doubles the discount horizon per step
   obsStackFrames: "2"      # stack 2 obs frames -> 64 dims
   rlAlphaGoodput: "0.8"
   rlBetaGoodput: "5"
-  rlBetaHandover: "5"
+  rlBetaHandover: "1.0"
   rlRewardComposition: multiplicative
   rlPingPongMultiplier: "5"
   rlHandoverHangoverLength: "1"

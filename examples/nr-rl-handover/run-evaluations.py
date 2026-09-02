@@ -390,12 +390,13 @@ def main():
 
         tag_dir.mkdir(parents=True, exist_ok=True)
         with open(tag_dir / "params.yaml", "w") as f:
-            yaml.dump({"mode": sc_mode, "n_seeds": n_seeds, "sim_time": sim_time,
+            yaml.dump({"mode": sc_mode, "n_seeds": n_seeds, "sim_time": sim_time, "checkpoint": checkpoint,
                        **common, **sc}, f, default_flow_style=False)
 
         if jobs > 1:
             with ThreadPoolExecutor(max_workers=jobs) as executor:
-                futures = {executor.submit(_run, s): s for s in range(1, n_seeds + 1)}
+                futures = {executor.submit(
+                    _run, s): s for s in range(1, n_seeds + 1)}
                 for future in as_completed(futures):
                     seed = futures[future]
                     try:

@@ -42,10 +42,12 @@ ns3_settings:
   rlRewardComposition: multiplicative
   rlPingPongMultiplier: "5"
   rlHandoverHangoverLength: "1"
-  rlRewardRefMbps: "15"    # keeps normG in the steep compl_pwr region
+  rlRewardRefMbps: "35"    # keeps normG in the steep compl_pwr region
   rlRewardGoodputShape: "compl_pwr"
   rlRewardGoodputP: "0.4"
-  bandwidthMhz: "10"
+  bandwidthMhz: "30"
+  numerology: "1"
+  trafficRateMbps: "100"   # well above the ~33 Mbps ceiling: load-agnostic
   errorModel: "eesm-ir-t1"
   channelUpdateMs: "20"    
   logging: "false"

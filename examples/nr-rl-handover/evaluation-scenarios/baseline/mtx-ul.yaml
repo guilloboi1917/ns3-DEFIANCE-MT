@@ -2,20 +2,21 @@
 #
 # Purpose: map the UL radio (goodput, e2e loss, UL SINR, HO rate) across
 # altitude bands and speeds under a NEAR-CAPACITY offered load, as baseline
-# context for the RL campaign (which trains/evaluates at 100 Mbps).
+# context for the RL campaign.
 #
-# Offered load: 15 Mbps at 10 MHz n0 — measured UL ceiling is 13.5 Mbps
-# (capacity probe, results/capacity-probe), so 15 Mbps is just above the
-# ceiling: UDP runs near capacity and the height/speed differences stay
-# visible in goodput AND loss. The 100 Mbps RL campaign is unaffected (the
-# agent sees the same obs/reward at any offered load above the ceiling).
+# Offered load: 35 Mbps at 30 MHz n1 — measured UL ceiling ~33 Mbps
+# (capacity probe, results/capacity-probe; to be re-confirmed on v5.1), so
+# the offered load is just above the ceiling: UDP runs near capacity and
+# the height/speed differences stay visible in goodput AND loss. The
+# 100 Mbps RL training is unaffected (the agent sees the same obs/reward at
+# any offered load above the ceiling).
 #
 # Grid: heights {[5-15], [50-100], [100-150], [150-200]} m x speeds
 #       {5, 10, 20} m/s, UDP = 12 cells.
-# Radio: 10 MHz, numerology 0 (15 kHz SCS) = canonical campaign config,
+# Radio: 30 MHz, numerology 1 (30 kHz SCS) = canonical campaign config,
 # triangle, random-waypoint at the fixed band, NO aerial interferers
 # (best-case radio), runId=1, 20 s sim, A3, eesm-ir-t1 (scenario default),
-# RLC UM (udp policy). 10 seeds (snapshot plan).
+# RLC UM (udp policy). 20 seeds.
 #
 # Run:
 #   python3 .../run-evaluations.py .../evaluation-scenarios/baseline/mtx-ul.yaml \
@@ -28,9 +29,9 @@ evaluation:
   sim_time: 20
   common:
     flowDirection: ul
-    bandwidthMhz: 10
-    numerology: 0
-    trafficRateMbps: 15
+    bandwidthMhz: 30
+    numerology: 1
+    trafficRateMbps: 35
     addInterferingUes: 0
     aerialUeRatio: 0
     topology: triangle

@@ -1,24 +1,28 @@
-# Trained RL agent evaluation (greedy, one episode per seed from the
-# checkpoint's best_checkpoint); results land in
-# results/<name>/<tag>/{raw,aggregate}.csv.
+# Trained RL agent evaluation under a TCP transport (robustness pass).
+# Same checkpoint and radio settings as agent-eval-ul-no-if, but the flow
+# is OnOff over TCP (RLC AM): the congestion controller dips after lossy
+# handovers (cwnd/RTO), so the RL-vs-A3 comparison is tested under a
+# transport that amplifies handover transients instead of passing them
+# through like CBR UDP. Traffic rate 35 Mbps is the TCP cap (offered load),
+# so both transports are offered the same headroom above the ~33 Mbps
+# UL ceiling.
 #
 # Run:
 #   python3 contrib/defiance/examples/nr-rl-handover/run-evaluations.py \
-#       contrib/defiance/examples/nr-rl-handover/evaluation-scenarios/rl/agent-eval-ul-no-if.yaml \
+#       contrib/defiance/examples/nr-rl-handover/evaluation-scenarios/rl/agent-eval-ul-no-if-tcp.yaml \
 #       --jobs 4 --analyze
 #
 # Reward/obs-affecting settings are INHERITED from the checkpoint run's
-# meta.yaml when not listed here, so the eval reward matches training while
-# the scenarios vary topology/interference. Explicit `common:` values override.
+# meta.yaml when not listed here; explicit `common:` values override.
 
 evaluation:
-  name: agent-eval-ul-no-if
+  name: agent-eval-ul-no-if-tcp
   mode: rl
   checkpoint: /home/nisaak/ray_results/PPO_<ul-no-if-run>/  # auto-appends best_checkpoint; or pass -a
   n_seeds: 20
   sim_time: 50                 # must match the training simDuration
   common:
-    transportProtocol: udp
+    transportProtocol: tcp
     flowDirection: ul           # 3GPP UAV primary direction (UL)
     uavMobility: random-waypoint
     startHeight: 50
@@ -31,10 +35,10 @@ evaluation:
     numerology: 1
     errorModel: eesm-ir-t1
     channelUpdateMs: 20         # channel spatial-consistency update period (ms)
-    trafficRateMbps: 35         # near-capacity load (UL ceiling ~33 Mbps); agent load-agnostic above it
+    trafficRateMbps: 35         # TCP cap == UDP offered load (same headroom)
     rlRewardRefMbps: 35         # must match the training config
   scenarios:
-    - tag: triangle-ul-no-if
+    - tag: triangle-ul-no-if-tcp
       topology: triangle
       addInterferingUes: 0
       aerialUeRatio: 0.0
