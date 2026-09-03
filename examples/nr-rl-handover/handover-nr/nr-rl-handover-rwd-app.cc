@@ -177,10 +177,10 @@ NrRlHandoverRewardApp::RegisterCallbacks()
             MakeCallback(&NrRlHandoverRewardApp::ObserveTbs, this));
     }
 
-    // --- PacketSink Rx trace on receiving node ---
-    NS_LOG_INFO("Connecting PacketSink Rx on receiver node " << g_receiverNodeId);
+    // --- Sink Rx trace on receiving node ---
+    NS_LOG_INFO("Connecting sink Rx on receiver node " << g_receiverNodeId);
     std::string rxPath = "/NodeList/" + std::to_string(g_receiverNodeId) +
-                         "/ApplicationList/*/$ns3::PacketSink/Rx";
+                         "/ApplicationList/*/Rx";
     Config::ConnectWithoutContext(rxPath,
                                   MakeCallback(&NrRlHandoverRewardApp::ObserveSinkRx, this));
 

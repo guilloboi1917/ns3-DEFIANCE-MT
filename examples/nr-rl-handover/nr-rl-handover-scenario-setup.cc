@@ -29,6 +29,7 @@
 #include "ns3/tcp-l4-protocol.h"
 #include "ns3/tcp-rate-ops.h"
 #include "ns3/tcp-socket-base.h"
+#include "ns3/quic-helper.h"
 
 #include <algorithm>
 #include <cmath>
@@ -603,6 +604,18 @@ SourceRetransmissionPacket(const Ptr<const Packet> packet,
     }
 }
 
+void
+QuicRetransmissionEvent(uint32_t packetCount, uint32_t bytes, uint8_t reason)
+{
+    // reason: 0 = loss detection (RFC 9002), 1 = PTO probe; both resend data.
+    g_totalRetransmissions++;
+    if (g_logging)
+    {
+        std::ofstream& retransmissionFile = LogStream("retransmissions.csv");
+        retransmissionFile << Simulator::Now().GetSeconds() << "," << bytes << "\n";
+    }
+}
+
 // ------------------------------------------------------------------------- //
 // Helper: bounding box over gNB positions (used by hexgrid topology)
 // ------------------------------------------------------------------------- //
@@ -788,6 +801,8 @@ scenarioSetup(std::string flowDirection = "ul",
               bool logging = false,
               bool rlMode = false,
               std::string handoverAlgorithm = "a3",
+              double a3HysteresisDb = 3.0,
+              uint32_t a3TttMs = 256,
               uint32_t stepTime = 400,
               uint32_t delay = 0,
               double rlAlphaGoodput = 0.8,
@@ -902,6 +917,8 @@ scenarioSetup(std::string flowDirection = "ul",
         metaOut << "aerialUeRatio: " << aerialUeRatio << "\n";
         metaOut << "rlMode: " << (rlMode ? "true" : "false") << "\n";
         metaOut << "handoverAlgorithm: " << handoverAlgorithm << "\n";
+        metaOut << "a3HysteresisDb: " << a3HysteresisDb << "\n";
+        metaOut << "a3TttMs: " << a3TttMs << "\n";
         metaOut << "stepTime: " << stepTime << "\n";
         metaOut << "delay: " << delay << "\n";
         metaOut << "rlAlphaGoodput: " << rlAlphaGoodput << "\n";
@@ -1011,9 +1028,10 @@ scenarioSetup(std::string flowDirection = "ul",
     else if (handoverAlgorithm == "a3")
     {
         g_nrHelper->SetHandoverAlgorithmType("ns3::NrA3RsrpHandoverAlgorithm");
-        double a3Hysteresis = 3.0;  // hardcoded A3 hysteresis
-        g_nrHelper->SetHandoverAlgorithmAttribute("Hysteresis", DoubleValue(a3Hysteresis));
-        g_nrHelper->SetHandoverAlgorithmAttribute("TimeToTrigger", TimeValue(MilliSeconds(256)));
+        g_nrHelper->SetHandoverAlgorithmAttribute("Hysteresis",
+                                                  DoubleValue(a3HysteresisDb));
+        g_nrHelper->SetHandoverAlgorithmAttribute("TimeToTrigger",
+                                                  TimeValue(MilliSeconds(a3TttMs)));
         Config::SetDefault("ns3::NrUePhy::EnableRlfDetection", BooleanValue(true));
     }
     else if (handoverAlgorithm == "noop")
@@ -1080,14 +1098,27 @@ scenarioSetup(std::string flowDirection = "ul",
     // to recover faster from handover-induced packet loss.
     Config::SetDefault("ns3::TcpSocketBase::MinRto", TimeValue(MilliSeconds(200)));
 
-    // TCP socket buffers sized above the BDP (~0.4 MB at the ~80 ms
-    // saturation RTT and the 50 Mbps link); the 128 KB ns-3 default would
-    // cap the transport at ~13 Mbps, making it buffer-limited instead of
-    // radio-limited.
+    // Socket buffers sized above the BDP (~0.4 MB at the ~80 ms saturation
+    // RTT and the 50 Mbps link); the 128 KB ns-3 default would cap the
+    // transport at ~13 Mbps, making it buffer-limited instead of radio-limited.
     if (transportProtocol == "tcp")
     {
         Config::SetDefault("ns3::TcpSocket::SndBufSize", UintegerValue(1 << 20));
         Config::SetDefault("ns3::TcpSocket::RcvBufSize", UintegerValue(1 << 20));
+    }
+    else if (transportProtocol == "quic")
+    {
+        // QUIC BBR (the module's only native congestion control; the
+        // QuicL4Protocol default is NewReno-flavored QuicCongestionOps).
+        TypeId quicCca = TypeId::LookupByName("ns3::QuicBbr");
+        Config::SetDefault("ns3::QuicL4Protocol::SocketType", TypeIdValue(quicCca));
+        // Same BDP rationale as TCP: 1 MB socket + stream buffers so the
+        // transport is radio-limited, not buffer-limited. Loss recovery uses
+        // RFC 9002 PTO timers (no TCP-style MinRto attribute).
+        Config::SetDefault("ns3::QuicSocketBase::SocketSndBufSize", UintegerValue(1 << 20));
+        Config::SetDefault("ns3::QuicSocketBase::SocketRcvBufSize", UintegerValue(1 << 20));
+        Config::SetDefault("ns3::QuicStreamBase::StreamSndBufSize", UintegerValue(1 << 20));
+        Config::SetDefault("ns3::QuicStreamBase::StreamRcvBufSize", UintegerValue(1 << 20));
     }
 
     // --- BWP routing --- //
@@ -1423,11 +1454,13 @@ scenarioSetup(std::string flowDirection = "ul",
     }
 
     // --- Configure RLC mode per transport protocol ---
-    // TCP: RLC AM (link-layer recovery reduces handover-induced TCP retransmissions)
-    // UDP: RLC UM (default, no link-layer retransmission needed)
+    // TCP/QUIC: RLC AM (link-layer recovery reduces handover-induced
+    // transport retransmissions); UDP: RLC UM (default, no link-layer
+    // retransmission needed)
     {
+        bool reliableTransport = (transportProtocol == "tcp" || transportProtocol == "quic");
         NrGnbRrc::NrQosFlowToRlcMapping_t rlcMode =
-            (transportProtocol == "tcp") ? NrGnbRrc::RLC_AM_ALWAYS : NrGnbRrc::RLC_UM_ALWAYS;
+            reliableTransport ? NrGnbRrc::RLC_AM_ALWAYS : NrGnbRrc::RLC_UM_ALWAYS;
         for (uint32_t i = 0; i < g_gnbContainer.GetN(); ++i)
         {
             Ptr<NrGnbNetDevice> gnbDev =
@@ -1670,12 +1703,28 @@ scenarioSetup(std::string flowDirection = "ul",
 
     // Install applications on the correct nodes per flow direction
     bool isTcp = (transportProtocol == "tcp");
-    std::string socketFactory = isTcp ? "ns3::TcpSocketFactory" : "ns3::UdpSocketFactory";
+    const bool isQuic = (transportProtocol == "quic");
+    std::string socketFactory =
+        isQuic ? "ns3::QuicSocketFactory"
+               : (isTcp ? "ns3::TcpSocketFactory" : "ns3::UdpSocketFactory");
+    ApplicationContainer sinkApp;
+    if (isQuic)
+    {
+        // QUIC is a separate L4 protocol (rides on its own UDP sockets); it
+        // must be aggregated on both endpoints before apps are installed.
+        // InstallQuic re-runs InternetStackHelper::Install, which is a no-op
+        // on the already-stacked EPC nodes (per-object GetObject guard).
+        QuicHelper quicStack;
+        quicStack.InstallQuic(NodeContainer(sourceNode, sinkNode));
+    }
+    // PacketSink is the sink for all transports (PacketSink over a QUIC
+    // socket is the module's supported receive pattern).
     PacketSinkHelper packetSinkHelper(socketFactory, sinkAddress);
-    auto sinkApp = packetSinkHelper.Install(sinkNode);
+    sinkApp = packetSinkHelper.Install(sinkNode);
 
     // OnOff data rate (Mbps) — the traffic cap (CLI --trafficRateMbps). Single
-    // source of truth for the OnOff applications (both TCP and UDP branches).
+    // source of truth for the traffic-generation branches (UDP/TCP OnOff at a
+    // fixed rate, QUIC client at an equivalent per-packet interval).
     // Above the link capacity this acts as full-buffer (goodput = link); below
     // it, the rate becomes the ceiling and idle slots appear (cheaper runtime).
     const double onOffDataRateMbps = trafficRateMbps;
@@ -1733,7 +1782,7 @@ scenarioSetup(std::string flowDirection = "ul",
                                           MakeCallback(&SourceRetransmissionPacket));
 
             std::string rxPath = "/NodeList/" + std::to_string(g_receiverNodeId) +
-                                 "/ApplicationList/*/$ns3::PacketSink/Rx";
+                                 "/ApplicationList/*/Rx";
             Config::ConnectWithoutContext(rxPath, MakeCallback(&SinkRxPacket));
 
             Config::ConnectWithoutContext(senderTcpBasePath + "RTT", MakeCallback(&TcpRttChange));
@@ -1779,7 +1828,7 @@ scenarioSetup(std::string flowDirection = "ul",
             });
         }
     }
-    else
+    else if (transportProtocol == "udp")
     {
         // UDP: use OnOff for both standalone and RL mode (BulkSend over UDP
         // has no flow control and overwhelms the NR MAC at line rate)
@@ -1799,22 +1848,74 @@ scenarioSetup(std::string flowDirection = "ul",
                                           "/DeviceList/*/NrUeRrc/HandoverEndError",
                                       MakeCallback(&HandoverError));
 
-        Simulator::Schedule(Seconds(1.1), []() {
-            Ptr<Node> uav = g_uavContainer.Get(0);
-            auto ueDev = uav->GetDevice(0)->GetObject<NrUeNetDevice>();
-            auto rrc = ueDev->GetRrc();
-            auto ipv4 = uav->GetObject<Ipv4>();
-            std::cout << "DEBUG t=" << Simulator::Now().GetSeconds()
-                      << " rrcState=" << rrc->GetState() << " cellId=" << rrc->GetCellId()
-                      << " ueIp=" << ipv4->GetAddress(1, 0).GetLocal() << "\n";
-        });
-
         // UDP: only SinkRx trace for throughput
         Simulator::Schedule(Seconds(1.1), []() {
             std::string rxPath = "/NodeList/" + std::to_string(g_receiverNodeId) +
-                                 "/ApplicationList/*/$ns3::PacketSink/Rx";
+                                 "/ApplicationList/*/Rx";
             Config::ConnectWithoutContext(rxPath, MakeCallback(&SinkRxPacket));
         });
+    }
+    else
+    {
+        // QUIC: BulkSend over a QUIC socket — the module's supported sender
+        // pattern (its own examples use it). Greedy full-buffer (MaxBytes 0):
+        // the offered-load cap (trafficRateMbps) applies to the OnOff
+        // transports only; QUIC BBR paces to the link.
+        BulkSendHelper quicSource("ns3::QuicSocketFactory", Address());
+        quicSource.SetAttribute("Remote", AddressValue(sinkAddress));
+        quicSource.SetAttribute("SendSize", UintegerValue(1400));
+        auto sourceApp = quicSource.Install(sourceNode);
+        sourceApp.Start(Seconds(1.05)); // sink listens at 1.0 s; 1-RTT handshake
+        sinkApp.Start(Seconds(1.0));
+
+        Config::ConnectWithoutContext("/NodeList/" + std::to_string(uavNodeId) +
+                                          "/DeviceList/*/NrUeRrc/HandoverEndOk",
+                                      MakeCallback(&HandoverOk));
+        Config::ConnectWithoutContext("/NodeList/" + std::to_string(uavNodeId) +
+                                          "/DeviceList/*/NrUeRrc/HandoverEndError",
+                                      MakeCallback(&HandoverError));
+
+        std::string senderQuicBasePath =
+            "/NodeList/" + std::to_string(g_senderNodeId) +
+            "/$ns3::QuicL4Protocol/SocketList/*/QuicSocketBase/";
+
+        // Metric-accumulating traces (always connected): sink throughput, QUIC
+        // loss-triggered retransmissions, RTT, congestion state. The QUIC
+        // socket exposes the same trace names as TCP; g_tcpConnected is shared
+        // because exactly one transport runs per simulation.
+        Simulator::Schedule(Seconds(1.1), [senderQuicBasePath]() {
+            std::string rxPath = "/NodeList/" + std::to_string(g_receiverNodeId) +
+                                 "/ApplicationList/*/Rx";
+            Config::ConnectWithoutContext(rxPath, MakeCallback(&SinkRxPacket));
+
+            Config::ConnectWithoutContext(senderQuicBasePath + "Retransmit",
+                                          MakeCallback(&QuicRetransmissionEvent));
+
+            Config::ConnectWithoutContext(senderQuicBasePath + "RTT",
+                                          MakeCallback(&TcpRttChange));
+
+            Config::ConnectWithoutContext(senderQuicBasePath + "CongState",
+                                          MakeCallback(&CongestionStateLogger));
+
+            g_tcpConnected = true;
+        });
+
+        if (logging)
+        {
+            Simulator::Schedule(Seconds(1.1), [senderQuicBasePath]() {
+                Config::ConnectWithoutContext(senderQuicBasePath + "CongestionWindow",
+                                              MakeCallback(&CwndTracer));
+
+                // QUIC BBR is the only native congestion control in the module.
+                Config::ConnectWithoutContext(
+                    senderQuicBasePath + "CongestionOps/$ns3::QuicBbr/PacingGain",
+                    MakeCallback(&BbrPacingGainChange));
+
+                Config::ConnectWithoutContext(
+                    senderQuicBasePath + "CongestionOps/$ns3::QuicBbr/CwndGain",
+                    MakeCallback(&BbrCwndGainChange));
+            });
+        }
     }
 
     // Non-TCP-specific traces (always connected, independent of transport protocol)

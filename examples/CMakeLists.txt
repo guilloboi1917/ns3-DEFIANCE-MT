@@ -184,6 +184,7 @@ build_lib_example(
                 ${libinternet}
                 ${libnr}
                 ${libdefiance}
+                ${libquic}
 )
 
 build_lib_example(

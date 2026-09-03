@@ -29,6 +29,8 @@ std::string g_interfererMobility = "static";
 bool g_logging = false;
 bool rlMode = false;
 std::string handoverAlgorithm = "a3";
+double a3HysteresisDb = 3.0;   // A3 hysteresis (dB)
+uint32_t a3TttMs = 256;       // A3 time-to-trigger (ms)
 uint32_t stepTime = 400; // ms (observation cadence)
 uint32_t delay = 0;      // ms
 double rlAlphaGoodput = 0.8;              ///< Deng-style: weight for goodput term [0,1]
@@ -170,6 +172,8 @@ main(int argc, char* argv[])
                  "Enable RL training mode (installs RL apps, disables FlowMonitor/CSV)",
                  rlMode);
     cmd.AddValue("handoverAlgorithm", "Handover algorithm (a3, noop, agent)", handoverAlgorithm);
+    cmd.AddValue("a3HysteresisDb", "A3 hysteresis in dB (a3 only)", a3HysteresisDb);
+    cmd.AddValue("a3TttMs", "A3 time-to-trigger in ms (a3 only)", a3TttMs);
     cmd.AddValue("stepTime",
                  "Step time in ms between RL agent decisions (only used with rlMode)",
                  stepTime);
@@ -253,9 +257,10 @@ main(int argc, char* argv[])
 
     if (rlMode)
     {
-        // Both transports are valid in RL mode: the reward/obs goodput is
-        // fed by the PacketSink Rx trace (transport-agnostic), and RLC AM
-        // (TCP) vs UM (UDP) is chosen by the scenario setup.
+        // All transports are valid in RL mode: the reward/obs goodput is fed
+        // by the sink Rx trace (transport-agnostic; PacketSink for UDP/TCP,
+        // QuicServer for QUIC), and RLC AM (TCP/QUIC) vs UM (UDP) is chosen
+        // by the scenario setup.
         OpenGymMultiAgentInterface::Get();
         Ns3AiMsgInterface::Get()->SetTrialName(trialName);
         std::cout << "RL mode: trial_name=" << trialName << " seed=" << seed << " runId=" << runId
@@ -266,6 +271,16 @@ main(int argc, char* argv[])
                   << " betaHandover=" << rlBetaHandover
                   << " hangoverLength=" << rlHandoverHangoverLength
                   << " rewardComposition=" << rlRewardComposition << std::endl;
+    }
+
+    if (g_transportProtocol == "quic")
+    {
+        std::cout << "WARNING: transportProtocol=quic is NOT usable. The ns-3 "
+                     "QUIC module (contrib/quic) stalls ~2 s into any bulk flow "
+                     "(sender wedges after the send-notify path fills its "
+                     "buffers), on its own P2P example with 0% and 2% loss. "
+                     "Use udp or tcp; QUIC integration kept only for the record."
+                  << std::endl;
     }
 
     scenarioSetup(g_flowDirection,
@@ -292,6 +307,8 @@ main(int argc, char* argv[])
                   g_logging,
                   rlMode,
                   handoverAlgorithm,
+                  a3HysteresisDb,
+                  a3TttMs,
                   stepTime,
                   delay,
                   rlAlphaGoodput,

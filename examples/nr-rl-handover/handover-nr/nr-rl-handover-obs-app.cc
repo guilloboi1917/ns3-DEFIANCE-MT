@@ -239,11 +239,12 @@ NrRlHandoverObservationApp::RegisterCallbacks()
     Config::Connect("/NodeList/" + std::to_string(m_uavNodeId) + "/$ns3::MobilityModel/CourseChange",
                     MakeCallback(&NrRlHandoverObservationApp::ObserveCourseChange, this));
 
-    // --- PacketSink Rx on the receiving node (for normalized goodput) ---
-    // DL: UAV is the receiver; UL: remoteHost is the receiver.
+    // --- Sink Rx on the receiving node (for normalized goodput) ---
+    // DL: UAV is the receiver; UL: remoteHost is the receiver. The wildcard
+    // matches PacketSink (UDP/TCP) or QuicServer (QUIC), the only app with an
+    // Rx trace on the receiver node.
     Config::ConnectWithoutContext(
-        "/NodeList/" + std::to_string(g_receiverNodeId) +
-            "/ApplicationList/*/$ns3::PacketSink/Rx",
+        "/NodeList/" + std::to_string(g_receiverNodeId) + "/ApplicationList/*/Rx",
         MakeCallback(&NrRlHandoverObservationApp::ObserveSinkRx, this));
 
     NS_LOG_INFO("NrRlHandoverObservationApp callbacks registered on node "
