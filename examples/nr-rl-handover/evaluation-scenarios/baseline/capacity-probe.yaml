@@ -1,0 +1,33 @@
+# capacity-probe — measure the UL saturation ceiling per radio cell.
+# A3, UDP, 100 Mbps offered (>> ceiling): sink goodput == link ceiling.
+# Cells: bw30-n1 (canonical campaign radio) + bw50-n1 (TR 36.777
+# 50 Mbps requirement cell), both at the CANONICAL [50-200] m height band
+# (2026-09-02; the earlier probe measured [50-100] m and read 40.3 / 63.5
+# Mbps on v5.1 — recorded in KnowledgeBase §6a / EVALUATION-RUN-PLAN §0b).
+# Offered loads in the other configs sit just above these ceilings, so
+# re-run this after any NR-module change that could shift the ceilings
+# (e.g., a migration) before trusting the offered-load rationale.
+#
+# Run:
+#   python3 .../run-evaluations.py .../evaluation-scenarios/baseline/capacity-probe.yaml \
+#       --jobs 2 --analyze
+# Result dirs: results/capacity-probe/{bw30-n1,bw50-n1}
+
+evaluation:
+  name: capacity-probe
+  mode: a3
+  n_seeds: 1
+  sim_time: 20
+  common:
+    flowDirection: ul
+    startHeight: 50
+    endHeight: 200
+    ueSpeed: 20
+    addInterferingUes: 0
+    aerialUeRatio: 0
+    topology: triangle
+    uavMobility: random-waypoint
+    trafficRateMbps: 100
+  scenarios:
+    - {tag: bw30-n1, bandwidthMhz: 30, numerology: 1}
+    - {tag: bw50-n1, bandwidthMhz: 50, numerology: 1}

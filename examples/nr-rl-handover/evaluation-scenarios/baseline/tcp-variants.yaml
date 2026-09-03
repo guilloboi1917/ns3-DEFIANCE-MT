@@ -1,0 +1,37 @@
+# tcp-variants.yaml — TCP congestion-control variants at the canonical cell
+# (A3). Purpose: motivate the BBR choice used in every TCP run of the
+# campaign, and seed the QUIC section (BBR is the default CC of QUIC stacks
+# such as Chrome/quiche, so the in-sim BBR result is the anchor for the
+# QUIC-vs-TCP discussion). Loss-based (NewReno, Cubic) vs model-based (BBR)
+# behavior across handover transients at the canonical offered load.
+#
+# Cell: 30 MHz n1, NO aerial interferers, [50-200] m @ 20 m/s, TCP cap
+# 35 Mbps (== the tcp-vs-udp TCP cell and the RL eval cap), RLC AM, 50 s
+# (canonical episode length), 20 seeds.
+#
+# Run:
+#   python3 .../run-evaluations.py .../evaluation-scenarios/baseline/tcp-variants.yaml \
+#       --jobs 4 --analyze
+
+evaluation:
+  name: tcp-variants
+  mode: a3
+  n_seeds: 20
+  sim_time: 50
+  common:
+    flowDirection: ul
+    transportProtocol: tcp
+    uavMobility: random-waypoint
+    startHeight: 50
+    endHeight: 200
+    ueSpeed: 20
+    addInterferingUes: 0
+    aerialUeRatio: 0
+    topology: triangle
+    bandwidthMhz: 30
+    numerology: 1
+    trafficRateMbps: 35        # TCP cap (offered load), same as the RL evals
+  scenarios:
+    - {tag: bbr,     tcpVariant: TcpBbr}
+    - {tag: cubic,   tcpVariant: TcpCubic}
+    - {tag: newreno, tcpVariant: TcpNewReno}

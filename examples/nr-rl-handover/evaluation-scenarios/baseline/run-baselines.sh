@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# run-baselines.sh — run every A3 baseline config (RL-comparison UL, DL
-# future-work reference, UDP matrix, TCP-vs-UDP) with analysis.
+# run-baselines.sh — A3 baseline campaign, B0-B4 in run order (narrative
+# block map: EVALUATION-RUN-PLAN §0c / CURRENT-NEXT-STEPS). Each config
+# runs with analysis; per-config failures do not stop the campaign.
 # Usage: ./run-baselines.sh [JOBS]   (default 5); DRY_RUN=1 to preview only.
-# Failing seeds do not stop the campaign; the runner exits non-zero per
-# config, so each config runs and reports its own status.
+# The RL evals (agent-eval-*, rl-eval-*) are separate configs — run them
+# with the same runner from CURRENT-NEXT-STEPS.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../../../../.." && pwd)"
@@ -17,10 +18,13 @@ EXTRA=""; [[ "${DRY_RUN:-0}" == "1" ]] && EXTRA="--dry-run"
 # in .../nr-rl-handover/results/ next to the other campaigns.
 cd "$ROOT/contrib/defiance/examples/nr-rl-handover"
 
-for cfg in nr-rl-handover-a3-baseline-10mhz-udp-ul.yaml \
-           nr-rl-handover-a3-baseline-10mhz-udp-dl.yaml \
+for cfg in capacity-probe.yaml \
+           tcp-vs-udp.yaml \
+           tcp-variants.yaml \
+           a3-sweep.yaml \
+           topology-hexgrid.yaml \
            mtx-ul.yaml \
-           tcp-vs-udp.yaml
+           a3-extremes-alt.yaml
 do
     echo "=== $cfg ==="
     python3 "$RUNNER" "$CFGS/$cfg" --jobs "$JOBS" --analyze $EXTRA \

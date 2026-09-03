@@ -80,8 +80,8 @@ NS3_DEFAULTS = {
     "aerialUeRatio": 0.0,
     "interfererMobility": "static",
     "transportProtocol": "udp",
-    "bandwidthMhz": 10,
-    "rlRewardRefMbps": 15.0,
+    "bandwidthMhz": 30,
+    "rlRewardRefMbps": 35.0,
 }
 
 

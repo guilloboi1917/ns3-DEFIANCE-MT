@@ -1,11 +1,9 @@
-# Trained RL agent evaluation under a TCP transport (robustness pass).
-# Same checkpoint and radio settings as agent-eval-ul-if, but the flow is
-# OnOff over TCP (RLC AM): the congestion controller dips after lossy
-# handovers (cwnd/RTO), so the RL-vs-A3 comparison is tested under a
-# transport that amplifies handover transients instead of passing them
-# through like CBR UDP. Traffic rate 35 Mbps is the TCP cap (offered load),
-# so both transports are offered the same headroom above the ~33 Mbps
-# UL ceiling.
+# Transfer eval (2026-09-02): the no-if TCP policy (beta 1.0,
+# PPO_2026-09-02_00-07-41) evaluated on the if scenario (4 aerial
+# interferers) — the run behind the transfer-win result (KB §8). OnOff
+# over TCP (RLC AM): the congestion controller dips after lossy
+# handovers (cwnd/RTO). Traffic rate 35 Mbps is the TCP cap (offered load),
+# below the measured v5.1 UL ceiling (~40 Mbps @ 30 MHz n1).
 #
 # Run:
 #   python3 contrib/defiance/examples/nr-rl-handover/run-evaluations.py \
@@ -18,7 +16,7 @@
 evaluation:
   name: agent-eval-ul-if-tcp
   mode: rl
-  checkpoint: /home/nisaak/ray_results/PPO_2026-08-31_14-53-00/  # ul-if (4 interferers), hangover 1; auto-appends best_checkpoint
+  checkpoint: /home/nisaak/ray_results/PPO_2026-09-02_20-53-50  # if TCP (beta 1.0); auto-appends best_checkpoint
   n_seeds: 20
   sim_time: 50                 # must match the training simDuration
   common:

@@ -1,15 +1,15 @@
 # mtx-ul.yaml — UDP-only height x speed UL characterization matrix (A3).
 #
 # Purpose: map the UL radio (goodput, e2e loss, UL SINR, HO rate) across
-# altitude bands and speeds under a NEAR-CAPACITY offered load, as baseline
-# context for the RL campaign.
+# altitude bands and speeds under a SATURATING offered load, as baseline
+# context for the RL campaign (evaluation B4, operating envelope).
 #
-# Offered load: 35 Mbps at 30 MHz n1 — measured UL ceiling ~33 Mbps
-# (capacity probe, results/capacity-probe; to be re-confirmed on v5.1), so
-# the offered load is just above the ceiling: UDP runs near capacity and
-# the height/speed differences stay visible in goodput AND loss. The
-# 100 Mbps RL training is unaffected (the agent sees the same obs/reward at
-# any offered load above the ceiling).
+# Offered load: 45 Mbps at 30 MHz n1 — above the measured v5.1 UL ceiling
+# (40.3 Mbps @ [50-100] m; canonical-band re-probe in capacity-probe.yaml),
+# so every band runs at/near capacity: the altitude/speed differences stay
+# visible in goodput AND loss (loss rises with altitude; low bands approach
+# lossless). The 100 Mbps RL training is unaffected (the agent sees the
+# same obs/reward at any offered load above the ceiling).
 #
 # Grid: heights {[5-15], [50-100], [100-150], [150-200]} m x speeds
 #       {5, 10, 20} m/s, UDP = 12 cells.
@@ -31,7 +31,7 @@ evaluation:
     flowDirection: ul
     bandwidthMhz: 30
     numerology: 1
-    trafficRateMbps: 35
+    trafficRateMbps: 45
     addInterferingUes: 0
     aerialUeRatio: 0
     topology: triangle

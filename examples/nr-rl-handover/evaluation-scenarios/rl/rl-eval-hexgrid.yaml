@@ -1,0 +1,41 @@
+# rl-eval-hexgrid.yaml — RL inference transfer across topology scale: the
+# triangle-trained no-if TCP policy (PPO_2026-09-02_00-07-41, beta 1.0)
+# evaluated zero-shot on the 21-cell hexgrid, same radio as training.
+# Companion to topology-hexgrid (A3) — the paired comparison answers
+# whether the B3 result survives the larger topology. 20 seeds; hexgrid
+# per-seed walltime ~2-3x triangle.
+#
+# Run:
+#   python3 .../run-evaluations.py .../evaluation-scenarios/rl/rl-eval-hexgrid.yaml \
+#       --jobs 4 --analyze
+#
+# Reward/obs-affecting settings are INHERITED from the checkpoint run's
+# meta.yaml when not listed here; explicit `common:` values override.
+
+evaluation:
+  name: rl-eval-hexgrid
+  mode: rl
+  checkpoint: /home/nisaak/ray_results/PPO_2026-09-02_00-07-41/  # no-if TCP, beta 1.0; auto-appends best_checkpoint
+  n_seeds: 20
+  sim_time: 50                 # must match the training simDuration
+  common:
+    transportProtocol: tcp
+    flowDirection: ul           # 3GPP UAV primary direction (UL)
+    uavMobility: random-waypoint
+    startHeight: 50
+    endHeight: 200
+    addInterferingUes: 0
+    aerialUeRatio: 0.0
+    interfererMobility: static
+    bandwidthMhz: 30
+    numerology: 1
+    errorModel: eesm-ir-t1
+    channelUpdateMs: 20
+    trafficRateMbps: 35         # TCP cap (offered load)
+    rlRewardRefMbps: 35         # must match the training config
+  scenarios:
+    - tag: hexgrid-ul-no-if-tcp
+      topology: hexgrid
+      numMacroCells: 7
+      addInterferingUes: 0
+      aerialUeRatio: 0.0

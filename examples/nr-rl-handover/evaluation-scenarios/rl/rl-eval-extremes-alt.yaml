@@ -1,0 +1,50 @@
+# rl-eval-extremes-alt.yaml — RL altitude-extreme evals: the no-if TCP
+# policy (PPO_2026-09-02_00-07-41, beta 1.0) evaluated at {5-15} m
+# (below-clutter) and {150-200} m (high-altitude LOS fan) at the canonical
+# speed 20 m/s, vs the A3 baselines (a3-extremes-alt). Purpose
+# (evaluation B4): test the altitude envelope of the B3 result and the
+# position-invariant-policy claim from the feature analysis (18 dead
+# trajectory dims).
+#
+# Radio: 30 MHz n1, NO aerial interferers, TCP cap 35 Mbps, RLC AM, 50 s,
+# 20 seeds.
+#
+# Run:
+#   python3 .../run-evaluations.py .../evaluation-scenarios/rl/rl-eval-extremes-alt.yaml \
+#       --jobs 4 --analyze
+#
+# Reward/obs-affecting settings are INHERITED from the checkpoint run's
+# meta.yaml when not listed here; explicit `common:` values override.
+
+evaluation:
+  name: rl-eval-extremes-alt
+  mode: rl
+  checkpoint: /home/nisaak/ray_results/PPO_2026-09-02_00-07-41/  # no-if TCP, beta 1.0; auto-appends best_checkpoint
+  n_seeds: 20
+  sim_time: 50                 # must match the training simDuration
+  common:
+    transportProtocol: tcp
+    flowDirection: ul           # 3GPP UAV primary direction (UL)
+    uavMobility: random-waypoint
+    ueSpeed: 20
+    addInterferingUes: 0
+    aerialUeRatio: 0.0
+    interfererMobility: static
+    topology: triangle
+    bandwidthMhz: 30
+    numerology: 1
+    errorModel: eesm-ir-t1
+    channelUpdateMs: 20
+    trafficRateMbps: 35         # TCP cap (offered load)
+    rlRewardRefMbps: 35         # must match the training config
+  scenarios:
+    - tag: h5-15
+      startHeight: 5
+      endHeight: 15
+      addInterferingUes: 0
+      aerialUeRatio: 0.0
+    - tag: h150-200
+      startHeight: 150
+      endHeight: 200
+      addInterferingUes: 0
+      aerialUeRatio: 0.0

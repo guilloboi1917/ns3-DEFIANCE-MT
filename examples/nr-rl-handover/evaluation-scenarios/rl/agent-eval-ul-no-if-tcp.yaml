@@ -4,8 +4,8 @@
 # handovers (cwnd/RTO), so the RL-vs-A3 comparison is tested under a
 # transport that amplifies handover transients instead of passing them
 # through like CBR UDP. Traffic rate 35 Mbps is the TCP cap (offered load),
-# so both transports are offered the same headroom above the ~33 Mbps
-# UL ceiling.
+# below the measured v5.1 UL ceiling (~40 Mbps @ 30 MHz n1) — the question
+# is whether TCP sustains its target through the handover dips.
 #
 # Run:
 #   python3 contrib/defiance/examples/nr-rl-handover/run-evaluations.py \
@@ -18,7 +18,7 @@
 evaluation:
   name: agent-eval-ul-no-if-tcp
   mode: rl
-  checkpoint: /home/nisaak/ray_results/PPO_<ul-no-if-run>/  # auto-appends best_checkpoint; or pass -a
+  checkpoint: /home/nisaak/ray_results/PPO_2026-09-02_00-07-41/  # no-if TCP, beta 1.0, 100 iters; auto-appends best_checkpoint
   n_seeds: 20
   sim_time: 50                 # must match the training simDuration
   common:

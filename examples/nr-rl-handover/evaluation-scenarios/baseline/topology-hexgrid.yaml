@@ -1,0 +1,35 @@
+# topology-hexgrid.yaml — topology scale (A3): handover/KPI behavior on the
+# triangle (9 gNBs, canonical) vs the hexgrid (21 gNBs, one ring at
+# intersiteDistance 500 m). Purpose (evaluation B3b): report how handover
+# counts / loss / SINR change when the UAV crosses a larger, denser layout.
+# The triangle cell reproduces results/nr-rl-handover-a3-baseline-30mhz-tcp-ul/
+# tcp-ul-no-if in the same config so the paired table is self-contained.
+#
+# Radio: 30 MHz n1, NO aerial interferers, [50-200] m @ 20 m/s, TCP cap
+# 35 Mbps (core regime), RLC AM, 50 s, A3, 20 seeds. Hexgrid per-seed
+# walltime is ~2-3x the triangle (21 cells).
+#
+# Run:
+#   python3 .../run-evaluations.py .../evaluation-scenarios/baseline/topology-hexgrid.yaml \
+#       --jobs 4 --analyze
+
+evaluation:
+  name: topology-hexgrid
+  mode: a3
+  n_seeds: 20
+  sim_time: 50
+  common:
+    flowDirection: ul
+    transportProtocol: tcp
+    uavMobility: random-waypoint
+    startHeight: 50
+    endHeight: 200
+    ueSpeed: 20
+    addInterferingUes: 0
+    aerialUeRatio: 0
+    bandwidthMhz: 30
+    numerology: 1
+    trafficRateMbps: 35        # TCP cap (offered load), same as the RL evals
+  scenarios:
+    - {tag: triangle, topology: triangle}
+    - {tag: hexgrid,  topology: hexgrid, numMacroCells: 7}

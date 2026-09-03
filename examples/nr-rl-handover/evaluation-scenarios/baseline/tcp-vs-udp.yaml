@@ -4,19 +4,23 @@
 # the transport penalty on top of the radio event.
 #
 # Two radio configs, each with a tcp and a udp cell:
-#   1. 30 MHz, numerology 1 (30 kHz SCS), 35 Mbps offered  (canonical
-#      campaign radio; measured UL ceiling ~33 Mbps -> load just above
-#      capacity, to be re-confirmed on v5.1)
-#   2. 50 MHz, numerology 1 (30 kHz), 50 Mbps offered  (n78-realistic;
-#      measured UL ceiling 48.8 Mbps -> 50 Mbps = the TR 36.777 UL data-rate
-#      requirement sits right at the link ceiling)
-# Offered >= ceiling makes the transport the bottleneck: UDP runs near
-# capacity, TCP dips at handover transients (cwnd/RTT spike). The 50 MHz n1
+#   1. 30 MHz, numerology 1 (30 kHz SCS)  — canonical campaign radio;
+#      UDP offered 45 Mbps (measured v5.1 UL ceiling 40.3 Mbps x 1.1 @
+#      [50-100] m; canonical-band re-probe in capacity-probe.yaml),
+#      TCP cap 35 Mbps (== the RL/A3 eval cap: can TCP sustain its target
+#      through handover dips?)
+#   2. 50 MHz, numerology 1 (30 kHz)  — n78-realistic; UDP offered
+#      70 Mbps (measured ceiling 63.5 Mbps x 1.1), TCP cap 50 Mbps
+#      (the TR 36.777 UL data-rate requirement).
+# Offered >= ceiling on the UDP cells makes the transport the bottleneck:
+# UDP runs near capacity, TCP dips at handover transients. The 50 MHz n1
 # cell shows the same effect at the TR requirement rate.
 #
-# Cell: [50-100] m @ 20 m/s, triangle, random-waypoint, NO aerial interferers
-# (best-case radio), runId=1, 20 s sim, eesm-ir-t1, RLC AM for tcp / UM for
-# udp (scenario policy), TcpBbr. 20 seeds.
+# Cell: [50-200] m @ 20 m/s (canonical band, 2026-09-02; was [50-100] m),
+# triangle, random-waypoint, NO aerial interferers (best-case radio),
+# runId=1, 50 s sim (canonical episode length, comparable with the B3
+# tables), eesm-ir-t1, RLC AM for tcp / UM for udp (scenario policy),
+# TcpBbr. 20 seeds.
 #
 # Run:
 #   python3 .../run-evaluations.py .../evaluation-scenarios/baseline/tcp-vs-udp.yaml \
@@ -26,11 +30,11 @@ evaluation:
   name: tcp-vs-udp
   mode: a3
   n_seeds: 20
-  sim_time: 20
+  sim_time: 50
   common:
     flowDirection: ul
     startHeight: 50
-    endHeight: 100
+    endHeight: 200
     ueSpeed: 20
     addInterferingUes: 0
     aerialUeRatio: 0
@@ -39,6 +43,6 @@ evaluation:
     tcpVariant: TcpBbr
   scenarios:
     - {tag: bw30-n1_tcp, transportProtocol: tcp, bandwidthMhz: 30, numerology: 1, trafficRateMbps: 35}
-    - {tag: bw30-n1_udp, transportProtocol: udp, bandwidthMhz: 30, numerology: 1, trafficRateMbps: 35}
+    - {tag: bw30-n1_udp, transportProtocol: udp, bandwidthMhz: 30, numerology: 1, trafficRateMbps: 45}
     - {tag: bw50-n1_tcp, transportProtocol: tcp, bandwidthMhz: 50, numerology: 1, trafficRateMbps: 50}
-    - {tag: bw50-n1_udp, transportProtocol: udp, bandwidthMhz: 50, numerology: 1, trafficRateMbps: 50}
+    - {tag: bw50-n1_udp, transportProtocol: udp, bandwidthMhz: 50, numerology: 1, trafficRateMbps: 70}
