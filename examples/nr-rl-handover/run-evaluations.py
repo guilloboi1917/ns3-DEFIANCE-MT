@@ -1,36 +1,10 @@
 #!/usr/bin/env python3
-"""run-evaluations.py — unified multi-seed evaluation runner.
+"""run-evaluations.py - run a scenario matrix x seeds in parallel.
 
-Runs a scenario matrix (A3 baselines and/or trained-policy evals) x seeds with
-parallel jobs. For each (scenario, seed) it executes the simulation, writes the
-per-seed output dir (seed_N/ with meta.yaml, the trace CSVs, the FlowMonitor
-file and a run-info.yaml with walltime/command), and does NOT compute any
-metrics — run analyze-evaluations.py (or pass --analyze) for the raw and
-aggregate tables. Consolidates the former evaluate-agent.py (RL evals) and
-run-evaluation.py (A3 baselines).
+Each (scenario, seed) writes results/<name>/<tag>/seed_N/.
+Analysis is separate: analyze-evaluations.py.
 
-YAML schema:
-
-    evaluation:
-      name: agent-eval-ul-if     # results/<name>/
-      mode: rl                   # a3 | rl (rl requires `checkpoint`)
-      checkpoint: /path/to/run/  # rl mode; an experiment dir (auto-appends
-                                 # best_checkpoint) or a checkpoint_N dir
-      n_seeds: 5
-      sim_time: 50
-      jobs: 4
-      common: {flowDirection: ul, ...}    # ns-3 settings shared by scenarios
-      scenarios:
-        - tag: triangle-ul-if
-          mode: rl               # optional per-scenario override
-          addInterferingUes: 4
-
-A run-agent meta.yaml or an experiment directory can also be given directly:
-the policy is then evaluated in its own training environment (checkpoint
-defaults to best_checkpoint, sim time to the training duration).
-
-Usage:
-    python3 run-evaluations.py <matrix.yaml> [--jobs 4] [--dry-run] [--analyze]
+Usage: python3 run-evaluations.py <matrix.yaml> [--jobs N] [--analyze] [--dry-run]
 """
 
 import argparse
@@ -280,6 +254,11 @@ def main():
                         help="Seeds to run concurrently (default: 1)")
     parser.add_argument("--n-seeds", "-s", type=int, default=None,
                         help="Override the number of seeds from the YAML")
+    parser.add_argument("--seed-start", type=int, default=1,
+                        help="First seed to run (default: 1). Use with --n-seeds "
+                             "to add seeds without re-running the existing ones")
+    parser.add_argument("--tags", type=str, default=None,
+                        help="Comma-separated scenario tags to run (default: all)")
     parser.add_argument("--sim-time", type=float, default=None,
                         help="Override simDuration (s) from the YAML")
     parser.add_argument("--checkpoint", "-a", type=str, default=None,
@@ -319,9 +298,16 @@ def main():
     mode = eval_cfg.get("mode", "a3")
     checkpoint = args.checkpoint or eval_cfg.get("checkpoint")
     n_seeds = args.n_seeds or eval_cfg.get("n_seeds", 5)
+    seed_start = args.seed_start
     sim_time = args.sim_time or eval_cfg.get("sim_time", 30)
     jobs = args.jobs
     scenarios = eval_cfg.get("scenarios", [])
+    if args.tags:
+        wanted = {t.strip() for t in args.tags.split(",") if t.strip()}
+        scenarios = [s for s in scenarios if s.get("tag") in wanted]
+        if not scenarios:
+            print(f"[ERROR] No scenario tag matched --tags {args.tags}")
+            sys.exit(1)
 
     if mode == "rl":
         if not checkpoint:
@@ -359,10 +345,10 @@ def main():
 
     base_dir = (Path(args.output).resolve() if args.output
                 else (RESULTS_DIR / eval_name).resolve())
-    total_runs = len(scenarios) * n_seeds
+    total_runs = len(scenarios) * max(0, n_seeds - seed_start + 1)
     print(f"Evaluation: {eval_name} (mode={mode}"
           + (f", checkpoint={checkpoint}" if mode == "rl" else "") + ")")
-    print(f"  Seeds: {1}..{n_seeds} | Scenarios: {len(scenarios)} | "
+    print(f"  Seeds: {seed_start}..{n_seeds} | Scenarios: {len(scenarios)} | "
           f"Jobs: {jobs} | Output: {base_dir}")
 
     run_count = fail_count = 0
@@ -379,7 +365,7 @@ def main():
                                 args.timeout)
 
         if args.dry_run:
-            for seed in range(1, n_seeds + 1):
+            for seed in range(seed_start, n_seeds + 1):
                 seed_dir = tag_dir / f"seed_{seed}"
                 cmd = (build_infer_cmd(sc, common, checkpoint, seed, seed_dir,
                                        run_agent, sim_time) if sc_mode == "rl"
@@ -396,7 +382,7 @@ def main():
         if jobs > 1:
             with ThreadPoolExecutor(max_workers=jobs) as executor:
                 futures = {executor.submit(
-                    _run, s): s for s in range(1, n_seeds + 1)}
+                    _run, s): s for s in range(seed_start, n_seeds + 1)}
                 for future in as_completed(futures):
                     seed = futures[future]
                     try:
@@ -414,7 +400,7 @@ def main():
                           f"{(run_count + fail_count) / total_runs * 100:.0f}%] "
                           f"seed={seed}, {time.time() - start_wall:.0f}s elapsed")
         else:
-            for seed in range(1, n_seeds + 1):
+            for seed in range(seed_start, n_seeds + 1):
                 result = _run(seed)
                 if "error" in result:
                     print(f"  seed={seed}: {result['error']}")

@@ -1,30 +1,10 @@
 #!/usr/bin/env python3
-"""analyze-evaluations.py — unified analysis of defiance evaluation results.
+"""analyze-evaluations.py - per-seed metrics for an evaluation results dir.
 
-Consumes any per-seed result directory produced by run-evaluations.py (or the
-legacy evaluate-agent.py / run-evaluation.py / run-matrix-ul.py layouts, which
-share the same per-(scenario, seed) structure). For each scenario it reads the
-per-seed trace files (direction-aware), computes the full metric set with
-units, and writes:
+Writes raw.csv (one row per seed), aggregate.csv (mean/std/p5/p50/p95) and
+sources.md into each results/<name>/<tag>/ dir. Missing sources yield NaN.
 
-    raw.csv          one row per seed (metric columns)
-    aggregate.csv    metric, unit, mean, std, p5, p50, p95 across seeds
-    sources.md       which source files were present/missing per seed
-
-Missing or empty sources yield NaN (not 0) so "not applicable" is visible in
-the tables. TCP-only and RL-only metrics are NaN for runs where they do not
-apply. The per-seed walltime comes from run-info.yaml (written by
-run-evaluations.py); legacy dirs lack it -> NaN.
-
-Metric set (units): goodput [Mbps], handovers/completions/ping-pong/RLF/
-retransmissions/actions [count], hoRate [1/s], e2e loss [%] (FlowMonitor
-tx-rx gap of the UAV data flow), HARQ corrupt [%] + TBLER + per-TB SINR/MCS
-(from nr-rl-{dl,ul}-rx-sinr.csv), direction SINR avg/p50 [dB], serving RSRP
-avg/p50 [dBm] and RSRQ [dB], RTT avg/p50 [ms], FlowMonitor delay/jitter [ms],
-TCP connect time [s], RL reward/action metrics, simTime and walltime [s].
-
-Usage:
-    python3 analyze-evaluations.py <results-dir-or-scenario-dir> [--dry-run]
+Usage: python3 analyze-evaluations.py <results-dir-or-scenario-dir> [--dry-run]
 """
 
 import argparse
@@ -113,11 +93,17 @@ def read_rows(path: Path, names: list, skiprows=1) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def parse_sink_goodput(path: Path, sim_time: float) -> float:
+def parse_sink_goodput(path: Path, window_s: float) -> float:
+    """Average delivered rate over the offered window (seconds).
+
+    window_s is sim_time minus the application start recorded in meta.yaml
+    (appStartS), so transports with different start times are normalised by
+    their own offered window rather than by the episode length.
+    """
     df = read_rows(path, ["time", "bytes"])
-    if df.empty or sim_time <= 0:
+    if df.empty or window_s <= 0:
         return _nan()
-    return float(df["bytes"].sum()) * 8.0 / 1e6 / sim_time
+    return float(df["bytes"].sum()) * 8.0 / 1e6 / window_s
 
 
 def parse_rtt(path: Path):
@@ -304,7 +290,9 @@ def analyze_seed(seed_dir: Path, sim_time: float) -> dict:
     sinr_csv = "ul_sinr_srs.csv" if flow == "ul" else "dl_sinr.csv"
     rx_csv = f"nr-rl-{flow}-rx-sinr.csv"
 
-    goodput = parse_sink_goodput(seed_dir / "sink-packets.csv", sim_time)
+    goodput = parse_sink_goodput(
+        seed_dir / "sink-packets.csv",
+        sim_time - float(meta.get("appStartS", 1.0) or 1.0))
     rtt_avg, rtt_p50, first_rtt = parse_rtt(seed_dir / "nr-rl-rtt.csv")
     sinr_avg, sinr_p50 = parse_sinr(seed_dir / sinr_csv)
     rsrp_avg, rsrp_p50, rsrq_avg = parse_ue_meas(seed_dir / "ue_meas_report.csv")
@@ -400,7 +388,7 @@ def analyze_scenario(tag_dir: Path) -> None:
     rows = [analyze_seed(d, sim_time) for d in seed_dirs]
     units = metric_units(flow)
 
-    # raw.csv — one row per seed, all metric columns in catalog order (NaN
+    # raw.csv - one row per seed, all metric columns in catalog order (NaN
     # where a source is missing / not applicable -> stable schema across runs).
     columns = ["seed"] + [c for c in units]
     with open(tag_dir / "raw.csv", "w", newline="") as f:
@@ -409,7 +397,7 @@ def analyze_scenario(tag_dir: Path) -> None:
         for r in rows:
             w.writerow({k: _fmt(v) for k, v in r.items()})
 
-    # aggregate.csv — metric, unit, mean, std, p5, p50, p95 across seeds
+    # aggregate.csv - metric, unit, mean, std, p5, p50, p95 across seeds
     with open(tag_dir / "aggregate.csv", "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["metric", "unit", "mean", "std", "p5", "p50", "p95"])
@@ -427,7 +415,7 @@ def analyze_scenario(tag_dir: Path) -> None:
                         _fmt(np.percentile(arr, 5)), _fmt(np.percentile(arr, 50)),
                         _fmt(np.percentile(arr, 95))])
 
-    # sources.md — which files were present across seeds
+    # sources.md - which files were present across seeds
     expected = ["meta.yaml", "sink-packets.csv", "nr-rl-rtt.csv", "ue_meas_report.csv",
                 "nr-rl-handovers.csv", f"nr-rl-{flow}-rx-sinr.csv",
                 "nr-rl.flowmonitor", "rl_reward.csv", "rl_actions_full.csv",
