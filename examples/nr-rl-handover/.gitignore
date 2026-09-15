@@ -1,5 +1,14 @@
 *.png
 *.csv
 *.flowmonitor
+__pycache__/
+*.pyc
 /output
 /results
+
+# keep the mirrored per-run training records (see checkpoints/README.md)
+!checkpoints/*/progress.csv
+
+# local working notes, not part of the repository
+/docs/
+/RL-AUDIT.md
