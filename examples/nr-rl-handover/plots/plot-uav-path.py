@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Plot the UAV path in 3D and top-down view.
-   Intermediate points (periodic) = light gray.
-   Waypoints (CourseChange) = colored by altitude with labels.
-   gNB antennas (from gnb-antennas.csv) = markers + translucent sector cones
-   oriented along each antenna's bearing angle."""
+"""Plot the UAV path (3D + top-down) from a seed dir.
 
-import os
+Waypoints (CourseChange) are colored by altitude; gNB antennas come from
+gnb-antennas.csv as markers plus translucent sector cones along each bearing.
+
+Usage: python3 plots/plot-uav-path.py [input] [-o out.png]
+"""
+
+import argparse
 import math
+import os
+import sys
 
 import pandas as pd
 
@@ -15,16 +19,46 @@ import matplotlib.patheffects as path_effects
 from matplotlib.patches import Wedge
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
+example_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-MOBILITY_FILE = script_dir + '/output/mobility.csv'
-ANTENNA_FILE = script_dir + '/output/gnb-antennas.csv'
-META_FILE = script_dir + '/output/meta.yaml'
+p = argparse.ArgumentParser(
+    description="Plot the UAV path (3D + top-down) from the logs in a data "
+                "dir: a seed dir under results/ or the sim output dir.")
+p.add_argument("input", nargs="?", default=None,
+               help="data dir with mobility.csv / gnb-antennas.csv / meta.yaml "
+                    "(default: <example_dir>/output)")
+p.add_argument("-o", "--output", default=None,
+               help="output PNG path (default: <input>/uav_path.png)")
+args = p.parse_args()
+
+data_dir = os.path.join(example_dir, "output") if args.input is None \
+    else os.path.abspath(args.input)
+if not os.path.isdir(data_dir):
+    sys.exit(f"[ERROR] data dir not found: {data_dir} (see --help)")
+# Reject multi-seed dirs (scenario dir or eval root) with a pointer to a
+# concrete seed dir; the plots are per single episode.
+for child in sorted(os.listdir(data_dir)):
+    p = os.path.join(data_dir, child)
+    if child.startswith("seed_"):
+        example = p
+        break
+    if os.path.isdir(p) and any(x.startswith("seed_") for x in os.listdir(p)):
+        example = os.path.join(p, "seed_1")
+        break
+else:
+    example = None
+if example:
+    sys.exit(f"[ERROR] {data_dir} is a multi-seed dir; pass one seed dir "
+             f"(e.g. {example}) (see --help)")
+
+MOBILITY_FILE = os.path.join(data_dir, 'mobility.csv')
+ANTENNA_FILE = os.path.join(data_dir, 'gnb-antennas.csv')
+META_FILE = os.path.join(data_dir, 'meta.yaml')
 
 if not os.path.exists(MOBILITY_FILE):
-    print(f"MOBILITY data file not found: {MOBILITY_FILE}")
-    print("Run 'ns3 run defiance-nr-rl-handover' first to generate it.")
-    exit(1)
+    sys.exit(f"[ERROR] mobility data file not found: {MOBILITY_FILE}\n"
+             "Run 'ns3 run defiance-nr-rl-handover' (output/) or point the "
+             "script at a seed dir under results/ (see --help).")
 
 # ---- gNB antenna positions/orientations (optional overlay) ----
 antennas = []
@@ -116,9 +150,9 @@ fig = plt.figure(figsize=(14, 6))
 ax = fig.add_subplot(121, projection="3d")
 
 # Intermediate path points: tiny, light gray (lowest zorder)
-ax.scatter(all_xs, all_ys, all_zs, color="lightgray", s=1, label="Intermediate", zorder=1)
+ax.scatter(all_xs, all_ys, all_zs, color="gray", s=1, zorder=1)
 # Path line: light gray, thin
-ax.plot(all_xs, all_ys, all_zs, color="lightgray", alpha=0.5, linewidth=0.8, zorder=1)
+ax.plot(all_xs, all_ys, all_zs, color="gray", alpha=0.5, linewidth=0.8, zorder=1)
 
 # gNB antennas (position only, for 3D context)
 if antennas:
@@ -128,13 +162,12 @@ if antennas:
 
 # Waypoints: colored by altitude, larger, with altitude labels (higher zorder)
 if len(wp_xs) > 0:
-    wp_sc = ax.scatter(wp_xs, wp_ys, wp_zs, c=wp_zs, cmap="plasma",
-                       s=60, edgecolors="black", linewidth=0.5, label="Waypoint", zorder=3)
+    ax.scatter(wp_xs, wp_ys, wp_zs, c=wp_zs, cmap="plasma",
+               s=60, edgecolors="black", linewidth=0.5, label="Waypoint", zorder=3)
     for wx, wy, wz in zip(wp_xs, wp_ys, wp_zs):
-        txt = ax.text(wx, wy, wz + 10, f"z={wz:.1f}",
+        txt = ax.text(wx, wy, wz + 20, f"z={wz:.1f}",
                       fontsize=8, color="black", ha="center", zorder=4)
         txt.set_path_effects([path_effects.withStroke(linewidth=3, foreground="white")])
-    fig.colorbar(wp_sc, ax=ax, label="Altitude (m)", shrink=0.6)
 
 # Start / End markers (topmost zorder) with altitude labels
 sx, sy, sz = all_xs[0], all_ys[0], all_zs[0]
@@ -143,11 +176,11 @@ ax.scatter([sx], [sy], [sz], color="green",
            s=80, marker="o", label="Start", zorder=5)
 ax.scatter([ex], [ey], [ez], color="red",
            s=80, marker="^", label="End", zorder=5)
-txt_s = ax.text(sx, sy, sz + 10, f"z={sz:.1f}",
-                fontsize=8, color="black", ha="center", zorder=4)
+txt_s = ax.text(sx, sy, sz - 25, f"z={sz:.1f}",
+                fontsize=8, color="green", ha="center", zorder=4)
 txt_s.set_path_effects([path_effects.withStroke(linewidth=3, foreground="white")])
-txt_e = ax.text(ex, ey, ez + 10, f"z={ez:.1f}",
-                fontsize=8, color="black", ha="center", zorder=4)
+txt_e = ax.text(ex, ey, ez - 25, f"z={ez:.1f}",
+                fontsize=8, color="red", ha="center", zorder=4)
 txt_e.set_path_effects([path_effects.withStroke(linewidth=3, foreground="white")])
 
 ax.set_xlabel("X (m)")
@@ -161,7 +194,7 @@ ax.legend(loc="upper left")
 ax2 = fig.add_subplot(122)
 
 # Intermediate path points: light gray (lowest zorder)
-ax2.scatter(all_xs, all_ys, color="lightgray", s=1, label="Intermediate", zorder=1)
+ax2.scatter(all_xs, all_ys, color="lightgray", s=1, zorder=1)
 ax2.plot(all_xs, all_ys, color="lightgray", alpha=0.5, linewidth=0.8, zorder=1)
 
 # gNB antennas: translucent sector cones + markers (over the path, under waypoints)
@@ -176,9 +209,9 @@ if len(wp_xs) > 0:
 
 # Start / End markers (topmost zorder) with altitude labels
 ax2.scatter([sx], [sy], color="green", s=80, marker="o", label="Start", zorder=5)
-ax2.text(sx, sy - 25, f"z={sz:.1f}", fontsize=8, color="green", ha="center", zorder=6)
+ax2.text(sx, sy - 35, f"z={sz:.1f}", fontsize=8, color="green", ha="center", zorder=6)
 ax2.scatter([ex], [ey], color="red", s=80, marker="^", label="End", zorder=5)
-ax2.text(ex, ey - 25, f"z={ez:.1f}", fontsize=8, color="red", ha="center", zorder=6)
+ax2.text(ex, ey - 35, f"z={ez:.1f}", fontsize=8, color="red", ha="center", zorder=6)
 
 ax2.set_xlabel("X (m)")
 ax2.set_ylabel("Y (m)")
@@ -187,12 +220,12 @@ ax2.set_aspect("equal")
 if antennas:
     from matplotlib.lines import Line2D
     ax2.legend(handles=[Line2D([0], [0], marker='^', color='none', markerfacecolor='black',
-                                markersize=8, label='gNB antenna'),
-                        Wedge((0, 0), 1, 0, 60, facecolor='gray', alpha=0.3,
-                              edgecolor='none', label='sector cone')],
+                                markersize=8, label='gNB antenna')],
                loc="upper left")
 
+out_file = os.path.abspath(args.output) if args.output \
+    else os.path.join(data_dir, "uav_path.png")
 plt.tight_layout()
-plt.savefig(script_dir + "/output/uav_path.png", dpi=150)
-print("Saved uav_path.png")
+plt.savefig(out_file, dpi=150)
+print(f"Saved {out_file}")
 plt.show()

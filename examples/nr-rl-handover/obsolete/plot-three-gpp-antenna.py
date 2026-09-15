@@ -1,22 +1,10 @@
 #!/usr/bin/env python3
-"""
-Validation of the ns-3 ThreeGppAntennaModelOriented (3GPP TR 38.901 Outdoor).
+"""Radiation pattern of ThreeGppAntennaModelOriented (TR 38.901 outdoor).
 
-Shows how the radiation pattern shifts with orientation (azimuth) and downtilt.
+Shows the gain over azimuth/elevation and how it shifts with the antenna
+orientation and downtilt.
 
-The oriented model applies:
-    phi_eff   = phi - orientation   (wrapped to [-180, 180])
-    theta_eff = theta - downtilt
-
-where:
-  orientation  = antenna horizontal pointing direction (degrees)
-  downtilt     = downward tilt angle (degrees, positive = below horizon)
-
-Outdoor pattern (ITU-R M.2412):
-  phi_3dB=65, theta_3dB=65, A_max=30, SLA_V=30, G_E,max=8
-
-Usage:
-    python3 plot-three-gpp-antenna.py
+Usage: python3 plots/plot-three-gpp-antenna.py
 """
 
 import numpy as np
@@ -24,7 +12,7 @@ import matplotlib.pyplot as plt
 from matplotlib import cm
 from matplotlib.gridspec import GridSpec
 
-# ─── Outdoor pattern parameters (3GPP TR 38.901 Table 7.3-1) ─────────
+# --- Outdoor pattern parameters (3GPP TR 38.901 Table 7.3-1) ---------
 OUTDOOR = {
     "phi_3dB": 65.0,
     "theta_3dB": 65.0,
@@ -125,16 +113,16 @@ def plot_3d_pattern(ax, orientation_deg=0.0, downtilt_deg=0.0,
     return norm
 
 
-# ─── Build figure ────────────────────────────────────────────────────────
+# --- Build figure --------------------------------------------------------
 fig = plt.figure(figsize=(20, 14), constrained_layout=True)
 gs = GridSpec(2, 4, figure=fig,
               width_ratios=[1, 1, 1, 1],
               height_ratios=[1.2, 1],
               hspace=0.30, wspace=0.25)
 
-# ═══════════════════════════════════════════════════════════════════════
-# TOP ROW: 3D surfaces — orientation sweep at downtilt = 0
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
+# TOP ROW: 3D surfaces - orientation sweep at downtilt = 0
+# =======================================================================
 axes_top = [fig.add_subplot(gs[0, i], projection="3d") for i in range(4)]
 orientations = [0, 45, 90, 120]
 
@@ -144,18 +132,18 @@ for ax, o in zip(axes_top, orientations):
 fig.suptitle("ThreeGppAntennaModelOriented — Outdoor Pattern Validation",
              fontsize=14, y=1.01)
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # BOTTOM ROW
-#   col 0-1: 3D surfaces — same orientations at downtilt = 10
+#   col 0-1: 3D surfaces - same orientations at downtilt = 10
 #   col 2:   azimuth cuts (tilt=0 solid, tilt=10 dashed)
 #   col 3:   vertical cuts showing tilt shift
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 ax_bot_0 = fig.add_subplot(gs[1, 0], projection="3d")
 ax_bot_1 = fig.add_subplot(gs[1, 1], projection="3d")
 ax_az_cut = fig.add_subplot(gs[1, 2])
 ax_vt_cut = fig.add_subplot(gs[1, 3])
 
-# --- Bottom-left 3D: Ori=0°, Tilt=10° and Ori=45°, Tilt=10° ---
+# --- Bottom-left 3D: Ori=0 deg, Tilt=10 deg and Ori=45 deg, Tilt=10 deg ---
 plot_3d_pattern(ax_bot_0, orientation_deg=0, downtilt_deg=10)
 plot_3d_pattern(ax_bot_1, orientation_deg=45, downtilt_deg=10)
 
@@ -219,7 +207,7 @@ ax_vt_cut.grid(True, alpha=0.3)
 ax_vt_cut.set_xlim(0, 180)
 ax_vt_cut.set_ylim(-35, 10)
 
-# ─── Validation summary ─────────────────────────────────────────────
+# --- Validation summary ---------------------------------------------
 valid_text = (
     "Validation checks:\n"
     "1. Azimuth gain peak at phi = orientation (solid lines)\n"

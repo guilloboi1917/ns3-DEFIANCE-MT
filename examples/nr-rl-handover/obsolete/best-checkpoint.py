@@ -1,26 +1,11 @@
 #!/usr/bin/env python3
-"""Infer which checkpoint of an RLlib run is the "best" one.
+"""Infer the best checkpoint of an RLlib run directory.
 
-Usage:
-    best-checkpoint.py ~/ray_results/SAC_2026-08-04_20-56-01/
-    best-checkpoint.py ~/ray_results/SAC_2026-08-04_20-56-01/ --all
-    best-checkpoint.py ~/ray_results/SAC_2026-08-04_20-56-01/ --window 5
-    best-checkpoint.py ~/ray_results/SAC_2026-08-04_20-56-01/ --min-iter 10
+Checkpoint index == iteration - 1 (verified; warns otherwise). Picks the argmax
+of a trailing-mean smoothed training curve (--window), preferring valid greedy
+eval returns when at least two eval points exist.
 
-Notes:
-  * Checkpoints are named `checkpoint_0000XX`, and with `checkpoint_frequency`
-    unset there is one per iteration: index == iteration - 1. The script
-    verifies this and warns otherwise.
-  * Training returns are noisy -> the default picks the argmax of a trailing-
-    mean smoothed curve (--window, default 3).
-  * Valid evaluation returns (explore=False) are preferred when >= 2 eval
-    points exist. NOTE: ray 2.55.1 drops eval results after iter 1 in some
-    setups, so a mostly-empty eval column is expected there; the script then
-    falls back to the training curve.
-  * `-a <run_dir>` passed to `run-agent infer` resolves to
-    `<run_dir>/best_checkpoint` (ray tune's metric-best), which is usually
-    NOT the literal final checkpoint. The script md5-maps that dir onto the
-    iteration it actually contains.
+Usage: python3 training/best-checkpoint.py <run-dir> [--all] [--window 5]
 """
 
 import argparse
@@ -166,8 +151,8 @@ def main() -> int:
     else:
         print("run best_checkpoint/: present but weights not matched to any "
               "checkpoint (different policy layout)")
-    print(f"\nNext: evaluate-agent.py agent-scenarios.yaml -a <recommended> "
-          "-j 4   (behavioral KPI selection)")
+    print("\nNext: run-evaluations.py <matrix.yaml> --jobs 4   "
+          "(behavioural KPI selection; checkpoint is set in the YAML)")
     return 0
 
 

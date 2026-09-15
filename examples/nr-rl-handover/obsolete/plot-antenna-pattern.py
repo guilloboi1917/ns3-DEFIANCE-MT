@@ -1,23 +1,10 @@
 #!/usr/bin/env python3
-"""
-3D visualization of the ns-3 ParabolicAntennaModel.
+"""3D gain pattern of the ns-3 ParabolicAntennaModel.
 
-The ParabolicAntennaModel gain (in dB) is:
+G(phi) = -min(12*(phi/theta_3dB)^2, A_max); the gain has no elevation
+dependence.
 
-    G(phi) = -min( 12 * (phi / theta_3dB)^2 ,  A_max )
-
-where:
-  phi       = azimuth angle relative to boresight (radians)
-  theta_3dB = 3 dB beamwidth (radians)
-  A_max     = maximum attenuation (dB)
-
-This model has no elevation dependence — the gain is constant
-for all inclination angles at a given azimuth offset.
-
-Usage:
-    python3 plot-antenna-pattern.py
-
-Adjust BEAMWIDTH, MAX_ATTENUATION, and ORIENTATION below.
+Usage: python3 plots/plot-antenna-pattern.py
 """
 
 import numpy as np
@@ -25,12 +12,12 @@ import matplotlib.pyplot as plt
 from matplotlib import cm
 
 
-# ─── User-configurable parameters ───────────────────────────────────────
+# --- User-configurable parameters ---------------------------------------
 BEAMWIDTH_DEG_PHI = 60.0        # 3 dB beamwidth (degrees)
 BEAMWIDTH_DEG_THETA = 60.0      # 3 dB beamwidth (degrees)
 MAX_ATTENUATION_DB = 20.0   # maximum attenuation (dB)
 ORIENTATION_DEG = 0.0       # boresight direction (degrees)
-# ────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------
 
 
 def parabolic_gain_db(phi_deg: np.ndarray,
@@ -59,7 +46,7 @@ def parabolic_gain_db(phi_deg: np.ndarray,
     return -np.minimum(12.0 * ((phi_rad / bw_phi_rad) ** 2) + 12.0 * ((theta_rad / bw_theta_rad) ** 2), max_atten)
 
 
-# ─── Build the 3D radiation pattern ─────────────────────────────────────
+# --- Build the 3D radiation pattern -------------------------------------
 # Spherical grid: theta = inclination (0 at +z), phi = azimuth (0 along +x)
 theta = np.linspace(0, 2*np.pi, 120)        # inclination
 phi = np.linspace(0, 2 * np.pi, 120)     # azimuth
@@ -84,13 +71,13 @@ Y = gain_linear * np.sin(Theta) * np.sin(Phi)
 Z = gain_linear * np.cos(Theta)
 
 
-# ─── Also create a 2D polar cut in the azimuth plane ────────────────────
+# --- Also create a 2D polar cut in the azimuth plane --------------------
 phi_1d = np.linspace(-180, 180, 721)
 gain_db_1d = parabolic_gain_db(phi_1d, 0.0, BEAMWIDTH_DEG_PHI, BEAMWIDTH_DEG_THETA, MAX_ATTENUATION_DB)
 gain_lin_1d = 10.0 ** (gain_db_1d / 20.0)
 phi_1d_rad = np.deg2rad(phi_1d)
 
-# ─── Plot ───────────────────────────────────────────────────────────────
+# --- Plot ---------------------------------------------------------------
 fig = plt.figure(figsize=(16, 7))
 
 # -- 3D surface plot (left) --

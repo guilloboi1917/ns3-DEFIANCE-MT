@@ -1,32 +1,12 @@
 #!/usr/bin/env python3
-"""Permutation feature importance for a trained handover policy.
+"""Permutation feature importance of a trained handover policy.
 
-Measures how much each observation dimension influences the policy's
-action choice. For each feature, the column is randomly shuffled across the
-batch and the ACTION CHANGE RATE (fraction of argmax actions that flip,
-mean(perturbed_actions != ref_actions)) is recorded. The change rate is used
-rather than the mean absolute action-index shift: the Discrete(N) index has no
-ordinal meaning for handovers (stay<->handover is more significant than
-switching handover targets), so a binary flip measure is the defensible one.
-Features the policy relies on show high importance; unused
-features show ~0.
+For each observation dimension, shuffles the column across the batch and
+records the action change rate (fraction of argmax actions that flip). Requires
+a policy checkpoint and an observation CSV (rl_obs.csv, written with
+--logging=true); outputs feature-importance.csv and feature-importance.png.
 
-Requires:
-  - An old-API-stack policy checkpoint (SAC/DQN/D3QN): either an experiment
-    dir under ~/ray_results with best_checkpoint/, or a direct checkpoint dir.
-  - An observation CSV (rl_obs.csv) with columns: time, obs[0..N].
-    Produced by the obs app when --logging=true.
-
-Usage:
-    python3 feature-importance.py \\
-        --checkpoint ~/ray_results/PPO_<run> \\
-        --obs-file output/inference-agent/rl_obs.csv \\
-        --min-time 1.0 \\
-        --repeat 5
-
-Outputs (default: next to --obs-file):
-  - feature-importance.csv : feature index, name, importance (sorted desc)
-  - feature-importance.png : labeled horizontal bar chart
+Usage: python3 analysis/feature-importance.py --checkpoint <run-dir> --obs-file <rl_obs.csv>
 """
 
 from __future__ import annotations
@@ -39,7 +19,7 @@ import yaml
 import numpy as np
 import pandas as pd
 
-# Top-N observation layout — must match BuildObservation() in
+# Top-N observation layout - must match BuildObservation() in
 # nr-rl-handover-obs-app.cc
 FEATURE_NAMES = [
     # Final obs layout (32 dims).
@@ -66,7 +46,8 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Permutation feature importance for a trained handover policy.")
     p.add_argument("--checkpoint", required=True,
-                   help="experiment dir (~/ray_results/<exp>) or direct checkpoint dir")
+                   help="run dir (checkpoints/<run>/ or $HOME/ray_results/<run>/) "
+                        "or direct checkpoint dir")
     p.add_argument("--obs-file", required=True,
                    help="rl_obs.csv, or a directory containing it "
                         "(e.g. an eval seed dir): columns time, obs[0..N]")
@@ -159,8 +140,8 @@ def stack_observations(df: pd.DataFrame, n_stack: int, pad_value=0.0) -> pd.Data
     """
     Expand each column into n_stack columns, preserving ALL rows via padding.
     
-    Input:  columns [x, y, z]           → shape (T, 3)
-    Output: columns [x_t, y_t, z_t,     → shape (T, 3 * n_stack)  ← same row count
+    Input:  columns [x, y, z]           -> shape (T, 3)
+    Output: columns [x_t, y_t, z_t,     -> shape (T, 3 * n_stack)  <- same row count
                      x_t-1, y_t-1, z_t-1,
                      x_t-2, y_t-2, z_t-2]
     
@@ -175,7 +156,7 @@ def stack_observations(df: pd.DataFrame, n_stack: int, pad_value=0.0) -> pd.Data
 
     arr = df.to_numpy(dtype=np.float64)  # (T, n_features)
 
-    # Pad the top with (n_stack - 1) copies of the FIRST observation — the env's
+    # Pad the top with (n_stack - 1) copies of the FIRST observation - the env's
     # FrameStackWrapper warm-up repeats the first obs (not zero-pads), so the
     # padded rows must replicate it to stay on-distribution.
     if n_stack > 1:
@@ -202,7 +183,7 @@ def stack_observations(df: pd.DataFrame, n_stack: int, pad_value=0.0) -> pd.Data
 
 def stacked_feature_names(n_stack: int) -> list[str]:
     """Feature names in the env's stacked layout (oldest frame first,
-    current frame last — matches FrameStackWrapper's deque concatenation)."""
+    current frame last - matches FrameStackWrapper's deque concatenation)."""
     names: list[str] = []
     for age in range(n_stack - 1, -1, -1):
         suffix = "t" if age == 0 else f"t-{age}"
@@ -256,7 +237,7 @@ def load_observations(obs_file: str, min_time: float | None, max_time: float | N
 def main() -> None:
     args = parse_args()
 
-    # ── Load policy ──────────────────────────────────────────────────
+    # -- Load policy --------------------------------------------------
     policy_dir, stack, training = resolve_policy_dir(args.checkpoint)
     print(f"Loading policy from {policy_dir} (stack={stack})")
 
@@ -266,7 +247,7 @@ def main() -> None:
         print(f"Policy uses obsStackFrames={obsStackFrames}; "
               f"FEATURE_NAMES will be repeated {obsStackFrames} times")
 
-    # Stacked feature names in the env's layout (oldest frame first) — used for
+    # Stacked feature names in the env's layout (oldest frame first) - used for
     # the dim checks AND the output names.
     stacked_names = stacked_feature_names(obsStackFrames)
     n_stacked = len(stacked_names)
@@ -326,7 +307,7 @@ def main() -> None:
 
     obs_dim = flat_shape[0]
 
-    # ── Load observations ───────────────────────────────────────────
+    # -- Load observations -------------------------------------------
     obs = load_observations(args.obs_file, args.min_time, args.max_time,
                             args.limit, args.seed, expected_dim=obs_dim,
                             n_stack=obsStackFrames,
@@ -337,14 +318,14 @@ def main() -> None:
 
     np.random.seed(args.seed)
 
-    # ── Reference actions ───────────────────────────────────────────
+    # -- Reference actions -------------------------------------------
     ref = batched_compute(obs).astype(np.int64)
     print(f"Reference action distribution: "
           f"{dict(zip(*np.unique(ref, return_counts=True)))}")
 
-    # ── Permutation importance ──────────────────────────────────────
+    # -- Permutation importance --------------------------------------
     # Action CHANGE RATE per feature: fraction of argmax decisions that flip
-    # when the feature column is shuffled (binary — the Discrete(N) action
+    # when the feature column is shuffled (binary - the Discrete(N) action
     # index is not an interval scale for handovers).
     n_feat = obs.shape[1]
     importance = np.zeros((args.repeat, n_feat))
@@ -360,7 +341,7 @@ def main() -> None:
     mean_imp = importance.mean(axis=0)
     std_imp = importance.std(axis=0)
 
-    # ── Outputs ─────────────────────────────────────────────────────
+    # -- Outputs -----------------------------------------------------
     obs_path = Path(args.obs_file).expanduser()
     if obs_path.is_dir():
         obs_path = obs_path / "rl_obs.csv"
@@ -378,7 +359,7 @@ def main() -> None:
     df_out.to_csv(csv_path, index=False)
     print(f"Wrote {csv_path}")
 
-    # ── Plot ────────────────────────────────────────────────────────
+    # -- Plot --------------------------------------------------------
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -399,7 +380,7 @@ def main() -> None:
     fig.savefig(png_path, dpi=150)
     print(f"Wrote {png_path}")
 
-    # ── Top features ────────────────────────────────────────────────
+    # -- Top features ------------------------------------------------
     print("\nTop 10 features:")
     for r in df_out.head(10).itertuples():
         print(f"  {r.name:16s} {r.importance:.4f} ± {r.std:.4f}")

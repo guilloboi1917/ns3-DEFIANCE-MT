@@ -1,17 +1,11 @@
 #!/usr/bin/env python3
-"""Patch a Ray Tune experiment state file to allow continued training.
+"""Raise the iteration limit of a Ray Tune experiment state file.
 
-Ray 2.x Tuner.restore() ignores CLI --iterations because the stop condition
-is baked into the experiment_state-*.json file.  This script edits that file
-in-place so training can resume past the original iteration limit.
+Ray 2.x Tuner.restore() ignores CLI --iterations because the stop condition is
+stored in experiment_state-*.json; this edits that file so training can resume
+past the original limit.
 
-Usage:
-    python continue_training.py ~/ray_results/PPO_2026-06-18_13-12-42/ --iterations 30
-    python continue_training.py ~/ray_results/PPO_2026-06-18_13-12-42/ -i 30 --dry-run
-
-After running this, use your normal train command with -a pointing to the same
-directory.  The -i flag on the CLI is still ignored, but the experiment state
-now has the desired limit.
+Usage: python3 training/continue-training.py <exp-dir> --iterations 30 [--dry-run]
 """
 
 from __future__ import annotations
