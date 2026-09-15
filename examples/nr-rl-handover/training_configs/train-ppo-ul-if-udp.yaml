@@ -38,7 +38,7 @@ ns3_settings:
   obsStackFrames: "2"      # stack 2 obs frames -> 64 dims
   rlAlphaGoodput: "0.8"
   rlBetaGoodput: "5"
-  rlBetaHandover: "5"
+  rlBetaHandover: "5"      # UDP uses a higher rlBetaHandover, as it does not have an inherent handover penalty such as TCP
   rlRewardComposition: multiplicative
   rlPingPongMultiplier: "5"
   rlHandoverHangoverLength: "1"

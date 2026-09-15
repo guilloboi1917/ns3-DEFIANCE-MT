@@ -1,4 +1,5 @@
-# TCP-training variant of train-ppo-ul-if
+# Beta-sensitivity leg of the no-if TCP agent: identical to
+# train-ppo-ul-no-if-tcp.yaml except rlBetaHandover 1.0 -> 5.0.
 type: train
 env_name: defiance-nr-rl-handover
 trainable: PPO
@@ -32,14 +33,14 @@ ns3_settings:
   handoverAlgorithm: agent
   transportProtocol: tcp
   flowDirection: ul
-  addInterferingUes: "4"
+  addInterferingUes: "0"
   aerialUeRatio: "1.0"
   interfererMobility: "static"
   stepTime: "400"          # 400 ms step: doubles the discount horizon per step
   obsStackFrames: "2"      # stack 2 obs frames -> 64 dims
-  rlAlphaGoodput: "0.8"    # No effect when using multiplicative reward composition
-  rlBetaGoodput: "5"       # No effect when using multiplicative reward composition
-  rlBetaHandover: "1.0"
+  rlAlphaGoodput: "0.8"
+  rlBetaGoodput: "5"
+  rlBetaHandover: "5.0"
   rlRewardComposition: multiplicative
   rlPingPongMultiplier: "5"
   rlHandoverHangoverLength: "1"
