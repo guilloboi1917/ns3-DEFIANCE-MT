@@ -1,0 +1,60 @@
+# agent-eval-ul-no-if-tcp-beta5-canonical.yaml -- CANONICAL REGIME COPY of agent-eval-ul-no-if-tcp-beta5.yaml.
+# Zero-shot re-evaluation of the frozen checkpoints in the canonical regime.
+# Canonical transport regime adopted 2026-09-08 (arm G of
+# baseline/delack-race.yaml; see KB buffer-timer-regime.md 8c):
+#   tcpSndBufBytes 1 MiB / rlcTxBufferBytes 2 MiB / tcpMinRtoMs 200 /
+#   tcpDelAckTimeoutMs 40 / tcpDelAckCount 2.
+# Measured effect vs the frozen regime (NewReno, 30 MHz n1): trapped
+# seeds 5/10 -> 0/10, silent RLC discards 401 -> 0 per seed, median
+# delivery 21.3 -> 49.6 MB, median RTT 54 -> 66 ms.
+# NOTE this is a different environment from the one the RL checkpoints
+# were trained in: use it for zero-shot transfer evaluation first.
+# Trained RL agent evaluation for the beta-5.0 sensitivity leg (no-if TCP).
+# Mirrors agent-eval-ul-no-if-tcp.yaml; the checkpoint is the beta-5.0 run
+# trained from train-ppo-ul-no-if-tcp-beta5.yaml (100 iters). The beta-1.0
+# reference (PPO_2026-09-02_00-07-41) ran 120 iters; the 100-vs-120
+# asymmetry is documented in the training config header (schedules annealed
+# by ~iter 47, reference tail flat after ~60, under-trained side
+# conservative). Same 20 paired seeds and radio settings as the beta-1.0
+# eval -> deltas on handovers/goodput/loss are seed-paired.
+#
+# Run:
+#   python3 contrib/defiance/examples/nr-rl-handover/run-evaluations.py \
+#       contrib/defiance/examples/nr-rl-handover/evaluation-scenarios/rl/agent-eval-ul-no-if-tcp-beta5.yaml \
+#       --jobs 4 --analyze
+#
+# Reward/obs-affecting settings are INHERITED from the checkpoint run's
+# meta.yaml when not listed here; explicit `common:` values override.
+
+evaluation:
+  name: agent-eval-ul-no-if-tcp-beta5-canonical
+  mode: rl
+  checkpoint: /home/nisaak/ray_results/PPO_2026-09-07_13-52-01/  # TODO: beta-5.0 no-if TCP run; auto-appends best_checkpoint
+  n_seeds: 20
+  sim_time: 50                 # must match the training simDuration
+  common:
+    tcpSndBufBytes: 1048576  # >= 2x BDP at the 50 MHz cell (canonical, G)
+    rlcTxBufferBytes: 2097152  # >= SndBuf + one BDP -> 0 NrRlc::TxDrop (canonical, G)
+    tcpMinRtoMs: 200  # Linux TCP_RTO_MIN (canonical, G)
+    tcpDelAckTimeoutMs: 40  # Linux TCP_DELACK_MIN; breaks the delayed-ACK/RTO race (canonical, G)
+    tcpDelAckCount: 2  # keep 2: does not inflate DL ACK volume (beam artifact #32)
+    transportProtocol: tcp
+    flowDirection: ul           # 3GPP UAV primary direction (UL)
+    uavMobility: random-waypoint
+    startHeight: 50
+    endHeight: 200
+    topology: triangle
+    addInterferingUes: 0
+    aerialUeRatio: 0.0
+    interfererMobility: static  # "waypoint" = legacy random flight
+    bandwidthMhz: 30
+    numerology: 1
+    errorModel: eesm-ir-t1
+    channelUpdateMs: 20         # channel spatial-consistency update period (ms)
+    trafficRateMbps: 35         # TCP cap == UDP offered load (same headroom)
+    rlRewardRefMbps: 35         # must match the training config
+  scenarios:
+    - tag: triangle-ul-no-if-tcp-beta5
+      topology: triangle
+      addInterferingUes: 0
+      aerialUeRatio: 0.0

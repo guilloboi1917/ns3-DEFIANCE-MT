@@ -1,0 +1,48 @@
+# REGIME: canonical (adopted 2026-09-11; RLC TX 2 MiB, TCP SndBuf 1 MiB,
+# MinRto 200 ms, DelAck 40 ms x2). Pre-canonical versions of this and the
+# rest of the campaign live in evaluation-scenarios/_archive/.
+# nr-rl-handover-a3-baseline-30mhz-quic-ul-m5t256.yaml -- sweep-tuned A3
+# (hysteresis 5 dB / TTT 256 ms), QUIC UL, no interference + 4 interferers.
+# Mirror of nr-rl-handover-a3-baseline-30mhz-tcp-ul-m5t256.yaml with the
+# transport swapped, so the RL-over-QUIC leg is compared against the same two
+# A3 comparators as the TCP leg (std 3 dB vs tuned 5 dB).
+#
+# Run:
+#   python3 contrib/defiance/examples/nr-rl-handover/run-evaluations.py \
+#       contrib/defiance/examples/nr-rl-handover/evaluation-scenarios/baseline/nr-rl-handover-a3-baseline-30mhz-quic-ul-m5t256.yaml \
+#       --jobs 5 --analyze
+
+evaluation:
+  name: "nr-rl-handover-a3-baseline-30mhz-quic-ul-m5t256"
+  mode: a3
+  n_seeds: 20
+  sim_time: 50
+  common:
+    rlcTxBufferBytes: 2097152  # canonical: RLC TX cap >= TCP SndBuf + one BDP
+    topology: triangle
+    intersiteDistance: 500
+    uavMobility: random-waypoint
+    ueSpeed: 20
+    startHeight: 50
+    endHeight: 200
+    bandwidthMhz: 30
+    numerology: 1
+    errorModel: eesm-ir-t1
+    channelUpdateMs: 20
+    trafficRateMbps: 35         # same offered load as the std QUIC and TCP arms
+    rlRewardRefMbps: 35         # informational (A3 runs no RL apps); matches the agent evals
+    a3HysteresisDb: 5           # sweep-tuned A3 (KB 13): was the 3 dB default
+    a3TttMs: 256                # sweep-tuned A3 (KB 13): unchanged default TTT
+  scenarios:
+    - tag: "quic-ul-no-if"
+      algorithm: a3
+      flowDirection: ul
+      addInterferingUes: 0
+      aerialUeRatio: 0.0
+      transportProtocol: quic
+    - tag: "quic-ul-if"
+      algorithm: a3
+      flowDirection: ul
+      addInterferingUes: 4
+      aerialUeRatio: 1.0
+      transportProtocol: quic

@@ -1,0 +1,41 @@
+# REGIME: canonical (adopted 2026-09-11; RLC TX 2 MiB, TCP SndBuf 1 MiB,
+# MinRto 200 ms, DelAck 40 ms x2). Pre-canonical versions of this and the
+# rest of the campaign live in evaluation-scenarios/_archive/.
+# capacity-probe-canonical.yaml -- re-derive the UL ceilings in the canonical
+# regime (3 seeds per band, 10/30/50 MHz). The pre-canonical probe was 1 seed x
+# 20 s and measured 39.5 Mbps (30 MHz) / 60.9 Mbps (50 MHz), which is where the
+# B1 offered loads 45/70 (1.14x / 1.15x) come from. This re-measures them in the
+# canonical regime over a full 50 s episode (handover-heavy part included) and
+# adds the 10 MHz band.
+# UDP saturates by construction; the RLC cap sets the queue, so the canonical
+# 2 MiB cap is stated explicitly here as well.
+#
+# sim_time is 50 s to match the 50 s transport cells: a 20 s probe would miss
+# the handover-heavy part of the episode and overestimate the sustained
+# ceiling, which would in turn make the offered load (ceiling x 1.1) too low to
+# keep the transports saturating.
+#
+# Run:
+#   python3 .../run-evaluations.py .../baseline/capacity-probe-canonical.yaml --jobs 3 --analyze
+
+evaluation:
+  name: capacity-probe-canonical
+  mode: a3
+  n_seeds: 3
+  sim_time: 50
+  common:
+    flowDirection: ul
+    transportProtocol: udp
+    uavMobility: random-waypoint
+    startHeight: 50
+    endHeight: 200
+    ueSpeed: 20
+    addInterferingUes: 0
+    aerialUeRatio: 0
+    topology: triangle
+    trafficRateMbps: 100
+    rlcTxBufferBytes: 2097152
+  scenarios:
+    - {tag: bw10-n1, bandwidthMhz: 10, numerology: 1}
+    - {tag: bw30-n1, bandwidthMhz: 30, numerology: 1}
+    - {tag: bw50-n1, bandwidthMhz: 50, numerology: 1}

@@ -1,0 +1,44 @@
+# Trained RL agent evaluation for the beta-5.0 sensitivity leg (no-if TCP).
+# Mirrors agent-eval-ul-no-if-tcp.yaml; the checkpoint is the beta-5.0 run
+# trained from train-ppo-ul-no-if-tcp-beta5.yaml (100 iters). The beta-1.0
+# reference (PPO_2026-09-02_00-07-41) ran 120 iters; the 100-vs-120
+# asymmetry is documented in the training config header (schedules annealed
+# by ~iter 47, reference tail flat after ~60, under-trained side
+# conservative). Same 20 paired seeds and radio settings as the beta-1.0
+# eval -> deltas on handovers/goodput/loss are seed-paired.
+#
+# Run:
+#   python3 contrib/defiance/examples/nr-rl-handover/run-evaluations.py \
+#       contrib/defiance/examples/nr-rl-handover/evaluation-scenarios/rl/agent-eval-ul-no-if-tcp-beta5.yaml \
+#       --jobs 4 --analyze
+#
+# Reward/obs-affecting settings are INHERITED from the checkpoint run's
+# meta.yaml when not listed here; explicit `common:` values override.
+
+evaluation:
+  name: agent-eval-ul-if-tcp-beta5-transfer
+  mode: rl
+  checkpoint: /home/nisaak/ray_results/PPO_2026-09-07_13-52-01/  # TODO: beta-5.0 if TCP transfer run; trained on no-if scenario
+  n_seeds: 20
+  sim_time: 50                 # must match the training simDuration
+  common:
+    transportProtocol: tcp
+    flowDirection: ul           # 3GPP UAV primary direction (UL)
+    uavMobility: random-waypoint
+    startHeight: 50
+    endHeight: 200
+    topology: triangle
+    addInterferingUes: 4
+    aerialUeRatio: 1.0
+    interfererMobility: static  # "waypoint" = legacy random flight
+    bandwidthMhz: 30
+    numerology: 1
+    errorModel: eesm-ir-t1
+    channelUpdateMs: 20         # channel spatial-consistency update period (ms)
+    trafficRateMbps: 35         # TCP cap == UDP offered load (same headroom)
+    rlRewardRefMbps: 35         # must match the training config
+  scenarios:
+    - tag: triangle-ul-if-tcp-beta5-transfer
+      topology: triangle
+      addInterferingUes: 4
+      aerialUeRatio: 1.0

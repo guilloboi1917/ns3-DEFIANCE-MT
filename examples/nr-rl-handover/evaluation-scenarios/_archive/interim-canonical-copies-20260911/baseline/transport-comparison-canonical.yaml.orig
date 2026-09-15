@@ -1,0 +1,60 @@
+# transport-comparison-canonical.yaml -- the three-transport block in the
+# canonical regime (2026-09-08): UDP vs TCP-BBR vs QUIC-BBR, UL, A3, 30/50 MHz.
+#
+# Supersedes baseline/tcp-vs-udp.yaml (which predates the canonical regime and
+# had no QUIC arm). All three transports are offered MORE than the path carries,
+# so the comparison is "what each transport delivers when the path is the
+# bottleneck" - the same framing the old UDP-vs-TCP block used:
+#   UDP  : OnOff at ceiling x 1.1, RLC UM, no congestion control
+#   TCP  : OnOff at ceiling x 1.1 (NOT the 35/50 cap), RLC AM, TcpBbr
+#   QUIC : BulkSend (unthrottled by design in the scenario - the module's
+#          supported sender is BulkSend/PacketSink), RLC AM, QuicBbr
+# The RL operating-point row (TCP/QUIC capped at 35/50) is a separate config:
+# use rl/agent-eval-* -canonical.yaml or tcp-variants-repaired.yaml.
+#
+# Confounds to footnote in the table (do NOT hide):
+#   1. RLC mode: UDP = UM, TCP/QUIC = AM (AM hides air loss from the transport).
+#   2. CC: TcpBbr vs QuicBbr - same family, different implementations.
+#   3. retransmissions.csv semantics differ per transport (TCP RTO-driven
+#      events vs QUIC loss-certified + PTO - not comparable; UDP NaN).
+#   4. Cross-transport handover/RSRP/SINR/TBLER columns are contaminated by the
+#      gNB single-beam artifact (BUGS-ISSUES #32) - do not tabulate them as a
+#      transport property; report the seed's handover count as a covariate only.
+#   5. The RLC cap acts as a QUEUE for UDP (no ACK-clocked backoff) and as a
+#      truncation guard for TCP/QUIC; a UDP offered-load sensitivity point
+#      (180 kB vs 2 MiB cap) is worth one extra cell to show it moves delay and
+#      loss, not goodput.
+#
+# Offered loads: re-derive ceiling x 1.1 from capacity-probe-canonical.yaml
+# (the 45/70 values below come from the pre-canonical probe and are placeholders).
+#
+# Run:
+#   python3 .../run-evaluations.py .../baseline/transport-comparison-canonical.yaml --jobs 6 --analyze
+
+evaluation:
+  name: transport-comparison-canonical
+  mode: a3
+  n_seeds: 20
+  sim_time: 50
+  common:
+    flowDirection: ul
+    startHeight: 50
+    endHeight: 200
+    ueSpeed: 20
+    addInterferingUes: 0
+    aerialUeRatio: 0
+    topology: triangle
+    uavMobility: random-waypoint
+    tcpVariant: TcpBbr
+    tcpSndBufBytes: 1048576
+    rlcTxBufferBytes: 2097152
+    tcpMinRtoMs: 200
+    tcpDelAckTimeoutMs: 40
+    tcpDelAckCount: 2
+  scenarios:
+    - {tag: bw30-n1_udp,  transportProtocol: udp,  bandwidthMhz: 30, numerology: 1, trafficRateMbps: 45}
+    - {tag: bw30-n1_tcp,  transportProtocol: tcp,  bandwidthMhz: 30, numerology: 1, trafficRateMbps: 45}
+    - {tag: bw30-n1_quic, transportProtocol: quic, bandwidthMhz: 30, numerology: 1, trafficRateMbps: 45}
+    - {tag: bw50-n1_udp,  transportProtocol: udp,  bandwidthMhz: 50, numerology: 1, trafficRateMbps: 70}
+    - {tag: bw50-n1_tcp,  transportProtocol: tcp,  bandwidthMhz: 50, numerology: 1, trafficRateMbps: 70}
+    - {tag: bw50-n1_quic, transportProtocol: quic, bandwidthMhz: 50, numerology: 1, trafficRateMbps: 70}

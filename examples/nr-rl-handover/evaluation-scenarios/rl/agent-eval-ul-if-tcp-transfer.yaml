@@ -1,25 +1,23 @@
 # REGIME: canonical (adopted 2026-09-11; RLC TX 2 MiB, TCP SndBuf 1 MiB,
 # MinRto 200 ms, DelAck 40 ms x2). Pre-canonical versions of this and the
 # rest of the campaign live in evaluation-scenarios/_archive/.
-# Transfer eval (2026-09-02): the no-if TCP policy (beta 1.0,
-# PPO_2026-09-02_00-07-41) evaluated on the if scenario (4 aerial
-# interferers) — the run behind the transfer-win result (KB §8). OnOff
-# over TCP (RLC AM): the congestion controller dips after lossy
-# handovers (cwnd/RTO). Traffic rate 35 Mbps is the TCP cap (offered load),
-# below the measured v5.1 UL ceiling (~40 Mbps @ 30 MHz n1).
+# agent-eval-ul-if-tcp-transfer.yaml -- zero-shot transfer leg: the no-if
+# checkpoint (PPO_2026-09-02_00-07-41, beta 1.0) evaluated under aerial
+# interference (4 static interferers). Recreated 2026-09-11: the results dir
+# results/agent-eval-ul-if-tcp-transfer existed but its source config did not
+# survive the scenario-file cleanup. Settings mirror agent-eval-ul-if-tcp.yaml
+# (the in-regime if agent) with only the checkpoint swapped, so the pairing
+# isolates the training regime.
 #
 # Run:
 #   python3 contrib/defiance/examples/nr-rl-handover/run-evaluations.py \
-#       contrib/defiance/examples/nr-rl-handover/evaluation-scenarios/rl/agent-eval-ul-if-tcp.yaml \
+#       contrib/defiance/examples/nr-rl-handover/evaluation-scenarios/rl/agent-eval-ul-if-tcp-transfer.yaml \
 #       --jobs 4 --analyze
-#
-# Reward/obs-affecting settings are INHERITED from the checkpoint run's
-# meta.yaml when not listed here; explicit `common:` values override.
 
 evaluation:
-  name: agent-eval-ul-if-tcp
+  name: agent-eval-ul-if-tcp-transfer
   mode: rl
-  checkpoint: /home/nisaak/masterthesis-ns3/ns-3-dev/contrib/defiance/examples/nr-rl-handover/checkpoints/PPO_2026-09-02_20-53-50  # if TCP (beta 1.0); auto-appends best_checkpoint
+  checkpoint: /home/nisaak/masterthesis-ns3/ns-3-dev/contrib/defiance/examples/nr-rl-handover/checkpoints/PPO_2026-09-02_00-07-41/  # no-if TCP, beta 1.0; auto-appends best_checkpoint
   n_seeds: 20
   sim_time: 50                 # must match the training simDuration
   common:

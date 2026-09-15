@@ -1,6 +1,3 @@
-# REGIME: canonical (adopted 2026-09-11; RLC TX 2 MiB, TCP SndBuf 1 MiB,
-# MinRto 200 ms, DelAck 40 ms x2). Pre-canonical versions of this and the
-# rest of the campaign live in evaluation-scenarios/_archive/.
 # mtx-ul.yaml — UDP-only height x speed UL characterization matrix (A3).
 #
 # Purpose: map the UL radio (goodput, e2e loss, UL SINR, HO rate) across
@@ -31,7 +28,6 @@ evaluation:
   n_seeds: 20
   sim_time: 20
   common:
-    rlcTxBufferBytes: 2097152  # canonical: RLC TX cap >= TCP SndBuf + one BDP
     flowDirection: ul
     bandwidthMhz: 30
     numerology: 1

@@ -1,0 +1,64 @@
+# tcp-variants-classic-recovery.yaml — congestion-control variants at the
+# canonical cell (A3), re-run with ns-3's CLASSIC recovery algorithm
+# (`TcpClassicRecovery`) instead of the default `TcpPrrRecovery`.
+#
+# RESULT 2026-09-08: NULL. The full 6 CC x 20 seed re-run changed nothing
+# (medians: newreno 3.41 -> 3.36, cubic 8.89 -> 8.95, vegas 1.90 -> 1.91,
+# veno 4.12 -> 3.14, westwood+ 8.21 -> 6.76 Mbps; BBR byte-identical), so the
+# PRR explanation in the historical note below is RETRACTED - the collapse is
+# a buffer/timer regime effect (BUGS-ISSUES #34, thesis KB
+# buffer-timer-regime.md). Kept as the ablation record; do not cite it as a
+# fix or as evidence about recovery algorithms.
+#
+# Historical hypothesis (retracted 2026-09-08, see RESULT above). Why: the
+# first campaign run (baseline/tcp-variants.yaml) used the ns-3
+# default recovery ops. With PRR, the classic controllers' congestion window
+# is pinned at 1 MSS during recovery (TcpPrrRecovery::DoRecovery sets
+# cWnd = bytesInFlight + sendCount), fast recovery fails to complete, the
+# socket escalates to RTO and never leaves it, and goodput collapses to
+# ~0.02 Mbps for the rest of the episode. BBR is exempt because
+# TcpBbr::HasCongControl() == true bypasses the recovery ops entirely.
+# Re-running with TcpClassicRecovery isolates the controller behaviour from
+# that recovery-path artifact (seed 11 NewReno: 2.08 -> 4.50 Mbps and alive
+# to t=49 s instead of dying at t=13 s; seed 8: 0.38 -> 14.15 Mbps).
+#
+# BBR is kept in this matrix as a control: setting recoveryType for BBR is a
+# no-op (HasCongControl bypasses the recovery ops), so its cell must match
+# the baseline run.
+#
+# Cell: 30 MHz n1, NO aerial interferers, [50-200] m @ 20 m/s, TCP cap
+# 35 Mbps (== the transport-comparison TCP cell and the RL eval cap), RLC AM, 50 s,
+# 20 seeds. All settings identical to baseline/tcp-variants.yaml except
+# `recoveryType`.
+#
+# Run:
+#   python3 .../run-evaluations.py \
+#       .../evaluation-scenarios/baseline/tcp-variants-classic-recovery.yaml \
+#       --jobs 4 --analyze
+
+evaluation:
+  name: tcp-variants-classic-recovery
+  mode: a3
+  n_seeds: 20
+  sim_time: 50
+  common:
+    flowDirection: ul
+    transportProtocol: tcp
+    uavMobility: random-waypoint
+    startHeight: 50
+    endHeight: 200
+    ueSpeed: 20
+    addInterferingUes: 0
+    aerialUeRatio: 0
+    topology: triangle
+    bandwidthMhz: 30
+    numerology: 1
+    trafficRateMbps: 35        # TCP cap (offered load), same as the RL evals
+    recoveryType: TcpClassicRecovery
+  scenarios:
+    - {tag: bbr,     tcpVariant: TcpBbr}          # control: recoveryType is a no-op for BBR
+    - {tag: cubic,   tcpVariant: TcpCubic}
+    - {tag: newreno, tcpVariant: TcpNewReno}
+    - {tag: westwoodplus, tcpVariant: TcpWestwoodPlus}
+    - {tag: vegas,   tcpVariant: TcpVegas}
+    - {tag: veno,    tcpVariant: TcpVeno}

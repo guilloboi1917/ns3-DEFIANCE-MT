@@ -1,6 +1,14 @@
-# REGIME: canonical (adopted 2026-09-11; RLC TX 2 MiB, TCP SndBuf 1 MiB,
-# MinRto 200 ms, DelAck 40 ms x2). Pre-canonical versions of this and the
-# rest of the campaign live in evaluation-scenarios/_archive/.
+# nr-rl-handover-a3-baseline-30mhz-tcp-ul-canonical.yaml -- CANONICAL REGIME COPY of nr-rl-handover-a3-baseline-30mhz-tcp-ul.yaml.
+# A3 comparison arm for the canonical-regime re-evaluation (same seeds as the RL canonical cells).
+# Canonical transport regime adopted 2026-09-08 (arm G of
+# baseline/delack-race.yaml; see KB buffer-timer-regime.md 8c):
+#   tcpSndBufBytes 1 MiB / rlcTxBufferBytes 2 MiB / tcpMinRtoMs 200 /
+#   tcpDelAckTimeoutMs 40 / tcpDelAckCount 2.
+# Measured effect vs the frozen regime (NewReno, 30 MHz n1): trapped
+# seeds 5/10 -> 0/10, silent RLC discards 401 -> 0 per seed, median
+# delivery 21.3 -> 49.6 MB, median RTT 54 -> 66 ms.
+# NOTE this is a different environment from the one the RL checkpoints
+# were trained in: use it for zero-shot transfer evaluation first.
 # nr-rl-handover-a3-baseline-30mhz-tcp-ul.yaml — A3 baseline (TCP, UL), no
 # interference variant. Controlled comparison cell for the TCP agent evals
 # (agent-eval-ul-*-tcp, trained at 30 MHz n1): same cell and offered load,
@@ -20,11 +28,11 @@ evaluation:
   sim_time: 50
 
   common:
-    tcpSndBufBytes: 1048576  # canonical: SndBuf >= 2x BDP
-    rlcTxBufferBytes: 2097152  # canonical: RLC TX cap >= SndBuf + one BDP
-    tcpMinRtoMs: 200  # canonical: Linux TCP_RTO_MIN
-    tcpDelAckTimeoutMs: 40  # canonical: Linux TCP_DELACK_MIN (breaks the delayed-ACK/RTO race)
-    tcpDelAckCount: 2
+    tcpSndBufBytes: 1048576  # >= 2x BDP at the 50 MHz cell (canonical, G)
+    rlcTxBufferBytes: 2097152  # >= SndBuf + one BDP -> 0 NrRlc::TxDrop (canonical, G)
+    tcpMinRtoMs: 200  # Linux TCP_RTO_MIN (canonical, G)
+    tcpDelAckTimeoutMs: 40  # Linux TCP_DELACK_MIN; breaks the delayed-ACK/RTO race (canonical, G)
+    tcpDelAckCount: 2  # keep 2: does not inflate DL ACK volume (beam artifact #32)
     topology: triangle
     intersiteDistance: 500
     uavMobility: random-waypoint

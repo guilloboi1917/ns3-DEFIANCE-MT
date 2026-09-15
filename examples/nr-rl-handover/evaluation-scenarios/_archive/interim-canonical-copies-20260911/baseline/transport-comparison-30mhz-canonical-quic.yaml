@@ -1,0 +1,40 @@
+# REGIME: canonical (adopted 2026-09-11; RLC TX 2 MiB, TCP SndBuf 1 MiB,
+# MinRto 200 ms, DelAck 40 ms x2). Pre-canonical versions of this and the
+# rest of the campaign live in evaluation-scenarios/_archive/.
+# transport-comparison-30mhz-canonical-quic.yaml -- QUIC-only slice of
+# transport-comparison-30mhz-canonical.yaml, so the QUIC cell can be run
+# without re-running the completed bw30-n1_udp / bw30-n1_tcp cells.
+#
+# Load-matched with those cells: 30 MHz n1, triangle, offered 43 Mbps
+# (= 1.12x the measured 38.23 Mbps ceiling), no interference, 50 s, 20 seeds.
+#
+# Run:
+#   python3 contrib/defiance/examples/nr-rl-handover/run-evaluations.py \
+#       contrib/defiance/examples/nr-rl-handover/evaluation-scenarios/baseline/transport-comparison-30mhz-canonical-quic.yaml \
+#       --output results/transport-comparison-canonical --jobs 5 --analyze
+#
+# The QUIC sender is OnOff over QuicSocketFactory at trafficRateMbps, matching
+# the UDP/TCP arms. The module's zero-delay pacing livelock is fixed in
+# contrib/quic (see docs/BUGS-ISSUES.md #35).
+evaluation:
+  name: transport-comparison-30mhz-canonical-quic
+  mode: a3
+  n_seeds: 20
+  sim_time: 50
+  common:
+    flowDirection: ul
+    startHeight: 50
+    endHeight: 200
+    ueSpeed: 20
+    addInterferingUes: 0
+    aerialUeRatio: 0
+    topology: triangle
+    uavMobility: random-waypoint
+    tcpVariant: TcpBbr
+    tcpSndBufBytes: 1048576
+    rlcTxBufferBytes: 2097152
+    tcpMinRtoMs: 200
+    tcpDelAckTimeoutMs: 40
+    tcpDelAckCount: 2
+  scenarios:
+    - {tag: bw30-n1_quic, transportProtocol: quic, bandwidthMhz: 30, numerology: 1, trafficRateMbps: 43}

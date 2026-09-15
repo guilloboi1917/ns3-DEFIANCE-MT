@@ -1,6 +1,14 @@
-# REGIME: canonical (adopted 2026-09-11; RLC TX 2 MiB, TCP SndBuf 1 MiB,
-# MinRto 200 ms, DelAck 40 ms x2). Pre-canonical versions of this and the
-# rest of the campaign live in evaluation-scenarios/_archive/.
+# nr-rl-handover-a3-baseline-30mhz-quic-ul-canonical.yaml -- CANONICAL REGIME COPY of nr-rl-handover-a3-baseline-30mhz-quic-ul.yaml.
+# Canonical QUIC cell (QUIC has no MinRto/DelAck attributes; the RLC cap is the knob that matters).
+# Canonical transport regime adopted 2026-09-08 (arm G of
+# baseline/delack-race.yaml; see KB buffer-timer-regime.md 8c):
+#   tcpSndBufBytes 1 MiB / rlcTxBufferBytes 2 MiB / tcpMinRtoMs 200 /
+#   tcpDelAckTimeoutMs 40 / tcpDelAckCount 2.
+# Measured effect vs the frozen regime (NewReno, 30 MHz n1): trapped
+# seeds 5/10 -> 0/10, silent RLC discards 401 -> 0 per seed, median
+# delivery 21.3 -> 49.6 MB, median RTT 54 -> 66 ms.
+# NOTE this is a different environment from the one the RL checkpoints
+# were trained in: use it for zero-shot transfer evaluation first.
 # nr-rl-handover-a3-baseline-30mhz-quic-ul.yaml — A3 baseline (QUIC BBR, UL),
 # no interference variant. Transport-comparison cell against the TCP config
 # (nr-rl-handover-a3-baseline-30mhz-tcp-ul.yaml) on identical geometry and
@@ -32,6 +40,11 @@ evaluation:
   sim_time: 50
 
   common:
+    # MANDATORY for QUIC: must be >= the 1 MiB QUIC socket/stream buffers,
+    # otherwise the startup burst overruns the UE RLC TX buffer and the flow
+    # wedges ~1.8 s in (#31 correction / #34). 2 MiB = canonical (G):
+    # >= SndBuf + one BDP -> 0 NrRlc::TxDrop.
+    rlcTxBufferBytes: 2097152
     topology: triangle
     intersiteDistance: 500
     uavMobility: random-waypoint
@@ -43,11 +56,6 @@ evaluation:
     errorModel: eesm-ir-t1
     channelUpdateMs: 20
     trafficRateMbps: 35         # near-capacity load (measured 30 MHz n1 UL ceiling ~33 Mbps)
-    rlcTxBufferBytes: 2097152  # canonical: RLC TX cap >= TCP SndBuf + one BDP
-                                 # socket/stream buffers, otherwise the startup
-                                 # burst overruns the UE RLC TX buffer and the
-                                 # flow wedges ~1.8 s in (#31 correction / #34).
-                                 # 1 MiB = the TCP SndBuf value used everywhere else
     rlRewardRefMbps: 35       # informational (A3 runs no RL apps); matches the agent evals
 
   scenarios:

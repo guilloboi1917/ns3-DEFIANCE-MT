@@ -1,0 +1,54 @@
+# REGIME: canonical (adopted 2026-09-11; RLC TX 2 MiB, TCP SndBuf 1 MiB,
+# MinRto 200 ms, DelAck 40 ms x2). Pre-canonical versions of this and the
+# rest of the campaign live in evaluation-scenarios/_archive/.
+# transport-comparison.yaml -- transport demo, A3 baseline: UDP vs the reliable
+# transports (TCP BBR, QUIC BBR) on the canonical 30 MHz n1 radio. TCP and
+# QUIC are NOT goodput-neutral on handovers: the congestion controller dips
+# (cwnd/RTT) after lossy handovers, so the comparison shows the transport
+# penalty on top of the radio event.
+#
+# One radio config (30 MHz, numerology 1), three cells:
+#   bw30-n1_udp   offered 45 Mbps (canonical v5.1 UL ceiling 38.2 Mbps x ~1.18)
+#   bw30-n1_tcp   cap 35 Mbps (== the RL/A3 eval cap and reward ref)
+#   bw30-n1_quic  cap 35 Mbps (same cap as TCP: the reliable-transport pair)
+# Offered >= ceiling on the UDP cell makes the radio, not the app, the limit:
+# UDP runs near capacity while the reliable transports dip at handover
+# transients.
+#
+# 50 MHz cells dropped 2026-09-11: 30 MHz is the canonical campaign radio, and
+# a 50 MHz row implied a second radio config in the B1 table. The load-matched
+# 3-transport cross-check at 43 Mbps is transport-comparison-load-matched.yaml.
+#
+# Cell: [50-200] m @ 20 m/s (canonical band), triangle, random-waypoint, NO
+# aerial interferers (best-case radio), runId=1, 50 s sim (canonical episode
+# length, comparable with the B3 tables), eesm-ir-t1, RLC AM for tcp/quic and
+# UM for udp (scenario policy), TcpBbr. 20 seeds.
+#
+# Run:
+#   python3 .../run-evaluations.py .../evaluation-scenarios/baseline/transport-comparison.yaml \
+#       --jobs 4 --analyze
+
+evaluation:
+  name: transport-comparison
+  mode: a3
+  n_seeds: 20
+  sim_time: 50
+  common:
+    tcpSndBufBytes: 1048576  # canonical: SndBuf >= 2x BDP
+    rlcTxBufferBytes: 2097152  # canonical: RLC TX cap >= SndBuf + one BDP
+    tcpMinRtoMs: 200  # canonical: Linux TCP_RTO_MIN
+    tcpDelAckTimeoutMs: 40  # canonical: Linux TCP_DELACK_MIN (breaks the delayed-ACK/RTO race)
+    tcpDelAckCount: 2
+    flowDirection: ul
+    startHeight: 50
+    endHeight: 200
+    ueSpeed: 20
+    addInterferingUes: 0
+    aerialUeRatio: 0
+    topology: triangle
+    uavMobility: random-waypoint
+    tcpVariant: TcpBbr
+  scenarios:
+    - {tag: bw30-n1_tcp,  transportProtocol: tcp,  bandwidthMhz: 30, numerology: 1, trafficRateMbps: 35}
+    - {tag: bw30-n1_quic, transportProtocol: quic, bandwidthMhz: 30, numerology: 1, trafficRateMbps: 35}
+    - {tag: bw30-n1_udp,  transportProtocol: udp,  bandwidthMhz: 30, numerology: 1, trafficRateMbps: 45}

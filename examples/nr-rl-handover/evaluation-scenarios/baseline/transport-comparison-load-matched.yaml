@@ -1,0 +1,60 @@
+# REGIME: canonical (adopted 2026-09-11; RLC TX 2 MiB, TCP SndBuf 1 MiB,
+# MinRto 200 ms, DelAck 40 ms x2). Pre-canonical versions of this and the
+# rest of the campaign live in evaluation-scenarios/_archive/.
+# transport-comparison-load-matched.yaml -- load-matched three-transport
+# cross-check in the canonical regime: UDP vs TCP-BBR vs QUIC-BBR, UL, A3,
+# 30 MHz n1, all three offered the SAME 43 Mbps (canonical ceiling 38.2 x ~1.12).
+#
+# Role 2026-09-11: CROSS-CHECK, not the B1 table. The B1 table is
+# baseline/transport-comparison.yaml (30 MHz, UDP saturating at 45 vs TCP/QUIC capped at
+# the 35 Mbps RL operating point). This config removes the offered-load
+# difference so the transport ranking can be attributed to the transport alone.
+# Its 50 MHz cells were dropped with the rest of the 50 MHz scope.
+#
+#   UDP  : OnOff at 43 Mbps, RLC UM, no congestion control
+#   TCP  : OnOff at 43 Mbps, RLC AM, TcpBbr
+#   QUIC : OnOff at 43 Mbps, RLC AM, QuicBbr
+#
+# Confounds to footnote in the table (do NOT hide):
+#   1. RLC mode: UDP = UM, TCP/QUIC = AM (AM hides air loss from the transport).
+#   2. CC: TcpBbr vs QuicBbr - same family, different implementations.
+#   3. retransmissions.csv semantics differ per transport (TCP RTO-driven
+#      events vs QUIC loss-certified + PTO - not comparable; UDP NaN).
+#   4. Cross-transport handover/RSRP/SINR/TBLER columns are contaminated by the
+#      gNB single-beam artifact (BUGS-ISSUES #32) - do not tabulate them as a
+#      transport property; report the seed's handover count as a covariate only.
+#   5. The RLC cap acts as a QUEUE for UDP (no ACK-clocked backoff) and as a
+#      truncation guard for TCP/QUIC; a UDP offered-load sensitivity point
+#      (180 kB vs 2 MiB cap) is worth one extra cell to show it moves delay and
+#      loss, not goodput.
+#
+# Offered load: 43 Mbps = canonical ceiling (38.2 Mbps, capacity-probe-canonical)
+# x ~1.12; kept at 43 because the existing bw30 cells were run there.
+#
+# Run:
+#   python3 .../run-evaluations.py .../baseline/transport-comparison-load-matched.yaml --jobs 6 --analyze
+
+evaluation:
+  name: transport-comparison-load-matched
+  mode: a3
+  n_seeds: 20
+  sim_time: 50
+  common:
+    flowDirection: ul
+    startHeight: 50
+    endHeight: 200
+    ueSpeed: 20
+    addInterferingUes: 0
+    aerialUeRatio: 0
+    topology: triangle
+    uavMobility: random-waypoint
+    tcpVariant: TcpBbr
+    tcpSndBufBytes: 1048576
+    rlcTxBufferBytes: 2097152
+    tcpMinRtoMs: 200
+    tcpDelAckTimeoutMs: 40
+    tcpDelAckCount: 2
+  scenarios:
+    - {tag: bw30-n1_udp,  transportProtocol: udp,  bandwidthMhz: 30, numerology: 1, trafficRateMbps: 43}
+    - {tag: bw30-n1_tcp,  transportProtocol: tcp,  bandwidthMhz: 30, numerology: 1, trafficRateMbps: 43}
+    - {tag: bw30-n1_quic, transportProtocol: quic, bandwidthMhz: 30, numerology: 1, trafficRateMbps: 43}

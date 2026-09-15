@@ -19,6 +19,7 @@ evaluation:
   n_seeds: 1
   sim_time: 20
   common:
+    rlcTxBufferBytes: 2097152  # canonical: RLC TX cap >= TCP SndBuf + one BDP
     flowDirection: ul
     startHeight: 50
     endHeight: 200

@@ -1,6 +1,3 @@
-# REGIME: canonical (adopted 2026-09-11; RLC TX 2 MiB, TCP SndBuf 1 MiB,
-# MinRto 200 ms, DelAck 40 ms x2). Pre-canonical versions of this and the
-# rest of the campaign live in evaluation-scenarios/_archive/.
 # a3-extremes-alt.yaml — A3 matched baselines for the altitude-extreme RL
 # evals (rl-eval-extremes-alt): {5-15} m (below-clutter) and {150-200} m
 # (high-altitude LOS fan) at the canonical speed 20 m/s. Purpose
@@ -21,11 +18,6 @@ evaluation:
   n_seeds: 20
   sim_time: 50
   common:
-    tcpSndBufBytes: 1048576  # canonical: SndBuf >= 2x BDP
-    rlcTxBufferBytes: 2097152  # canonical: RLC TX cap >= SndBuf + one BDP
-    tcpMinRtoMs: 200  # canonical: Linux TCP_RTO_MIN
-    tcpDelAckTimeoutMs: 40  # canonical: Linux TCP_DELACK_MIN (breaks the delayed-ACK/RTO race)
-    tcpDelAckCount: 2
     flowDirection: ul
     transportProtocol: tcp
     uavMobility: random-waypoint

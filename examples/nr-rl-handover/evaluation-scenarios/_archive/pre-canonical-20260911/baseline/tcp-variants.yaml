@@ -1,6 +1,3 @@
-# REGIME: canonical (adopted 2026-09-11; RLC TX 2 MiB, TCP SndBuf 1 MiB,
-# MinRto 200 ms, DelAck 40 ms x2). Pre-canonical versions of this and the
-# rest of the campaign live in evaluation-scenarios/_archive/.
 # tcp-variants.yaml — TCP congestion-control variants at the canonical cell
 # (A3). Purpose: motivate the BBR choice used in every TCP run of the
 # campaign, and seed the QUIC section (BBR is the default CC of QUIC stacks
@@ -9,7 +6,7 @@
 # behavior across handover transients at the canonical offered load.
 #
 # Cell: 30 MHz n1, NO aerial interferers, [50-200] m @ 20 m/s, TCP cap
-# 35 Mbps (== the transport-comparison TCP cell and the RL eval cap), RLC AM, 50 s
+# 35 Mbps (== the tcp-vs-udp TCP cell and the RL eval cap), RLC AM, 50 s
 # (canonical episode length), 20 seeds.
 #
 # Run:
@@ -22,11 +19,6 @@ evaluation:
   n_seeds: 20
   sim_time: 50
   common:
-    tcpSndBufBytes: 1048576  # canonical: SndBuf >= 2x BDP
-    rlcTxBufferBytes: 2097152  # canonical: RLC TX cap >= SndBuf + one BDP
-    tcpMinRtoMs: 200  # canonical: Linux TCP_RTO_MIN
-    tcpDelAckTimeoutMs: 40  # canonical: Linux TCP_DELACK_MIN (breaks the delayed-ACK/RTO race)
-    tcpDelAckCount: 2
     flowDirection: ul
     transportProtocol: tcp
     uavMobility: random-waypoint

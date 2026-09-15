@@ -19,7 +19,7 @@
 evaluation:
   name: rl-eval-extremes-alt
   mode: rl
-  checkpoint: /home/nisaak/ray_results/PPO_2026-09-02_00-07-41/  # no-if TCP, beta 1.0; auto-appends best_checkpoint
+  checkpoint: /home/nisaak/masterthesis-ns3/ns-3-dev/contrib/defiance/examples/nr-rl-handover/checkpoints/PPO_2026-09-02_00-07-41/  # no-if TCP, beta 1.0; auto-appends best_checkpoint
   n_seeds: 20
   sim_time: 50                 # must match the training simDuration
   common:

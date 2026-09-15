@@ -1,0 +1,117 @@
+# delack-race.yaml — does the receiver's delayed-ACK timer cause the classic-CC
+# collapse, and what is the canonical transport buffer/timer regime?
+#
+# Hypothesis under test (2026-09-08, BUGS-ISSUES #34):
+#   The 1-segment trap is a RACE between two unrelated 200 ms timers. sender:
+#   the RTO floor `MinRto` = 200 ms (deliberate thesis choice, Linux
+#   TCP_RTO_MIN), on which the RTO sits because the estimator re-samples only
+#   the fast retransmission path. receiver: ns-3's delayed ACK defaults
+#   (`TcpSocket::DelAckTimeout` 200 ms, `DelAckCount` 2, never overridden).
+#   At cwnd = 1 MSS the receiver never accumulates two segments, so every ACK
+#   waits the full 200 ms and additionally needs the downlink: the ACK arrives
+#   ~222 ms after the data reaches the sink while the RTO fires at exactly
+#   200 ms, so the sender times out spuriously, resets cwnd to 1 MSS, and the
+#   cycle repeats at 3.4-3.6 pkt/s forever (measured: CA_OPEN->CA_LOSS equals
+#   the MinRto floor to the ms; 137 events per 30 s at MinRto 200, 6 events at
+#   MinRto 500 where the flow escapes).
+#
+# Why NewReno and why the 180 kB RLC cap:
+#   - NewReno is the plain AIMD reference and the variant with the strongest
+#     trap signal at the frozen budget (median 21.3 MB over 20 seeds, 13/20
+#     seeds dead, tails at exactly 3.6 pkt/s).
+#   - The trap must be PRESENT for the test to have signal. At a 512 kB socket
+#     buffer the burst cannot overshoot far enough and the collapse mostly
+#     disappears (NewReno seeds 1/2/8 at 512 kB SndBuf: 49.6/50.2/80.4 MB with
+#     tails 562/1099/1843 pkt/s, no collapse; at 1 MiB SndBuf: 20.0/2.4/2.4 MB
+#     with 3-4 pkt/s tails). Testing the timer at 512/500 would therefore be a
+#     no-signal test, and pairing it with a buffer change would confound the
+#     single-variable comparison.
+#   - So arm 2 keeps SndBuf and the RLC cap exactly as in the frozen regime and
+#     changes ONLY the delayed-ACK timeout: that is the mechanism test.
+#
+# Arms (10 seeds, A3, 30 MHz n1, UL, cap 35 Mbps, 50 s, no interferers) - a
+# 2x2 on the two axes plus two alternatives:
+#   A A-ref-180k-dack200    trigger=yes fatality=yes  frozen regime (trapped)
+#   B B-cap1m-dack200       trigger=no  fatality=yes  buffer fix alone
+#   C C-180k-dack40         trigger=yes fatality=no   MECHANISM TEST
+#   D D-cap1m-dack40        trigger=no  fatality=no   canonical candidate
+#   E E-cap1m-mr1000        sender-side RTO-floor alternative (drops still 0)
+#   F F-sb512-cap500-dack40 latency-optimised (SndBuf 512 kB, cap 500 kB)
+#
+# Optional extra arms (uncomment to run):
+#   - nr-dackcount1-rlc180k   receiver ACKs every segment (DelAckCount 1);
+#                             NOTE it doubles the DL ACK volume, which drives the
+#                             gNB single-beam measurement artifact (#32)
+#   - nr-dack40-sb512-rlc500  latency-optimised candidate (SndBuf 512 kB,
+#                             cap 500 kB = 1.35x BDP at the 50 MHz cell,
+#                             one-way delay ~46 vs ~52 ms for BBR)
+#
+# Decision rules (fixed before looking at the numbers):
+#   Mechanism: arm C (fatality fixed only) must show no 3.4-3.6 pkt/s tails and
+#   a collapsed CA_OPEN->CA_LOSS cycle count with p50 interval >> 200 ms, while
+#   its RLC drop count stays ~400/seed like arm A. If so, the drop burst is the
+#   trigger and the timer race is the fatality. If arm C still collapses, the
+#   race explanation is wrong (next suspect: downlink ACK delivery / gNB RLC AM
+#   status timing).
+#   Canonical: arm D is the candidate. Prefer it over arm E if it matches or
+#   beats E's goodput (it keeps MinRto at the realistic Linux 200 ms), and over
+#   arm F unless F's lower latency is worth the smaller BDP headroom (1.35x vs
+#   2.7x at the 50 MHz cell).
+#   Arm B is the "buffer fix alone" control: it must show that zero RLC drops
+#   still leaves handover-triggered stalls while the timer race is unfixed.
+#
+# Run:
+#   python3 .../run-evaluations.py .../evaluation-scenarios/baseline/delack-race.yaml \
+#       --jobs 6 --analyze
+#   python3 .../obsolete/analyze-timer-race.py results/delack-race
+#   (analyze-timer-race.py MOVED to obsolete/ 2026-09-11; this probe is closed)
+
+evaluation:
+  name: delack-race
+  mode: a3
+  n_seeds: 10
+  sim_time: 50                 # canonical episode length (do not drop this key)
+
+  common:
+    flowDirection: ul
+    transportProtocol: tcp
+    tcpVariant: TcpNewReno
+    uavMobility: random-waypoint
+    startHeight: 50
+    endHeight: 200
+    ueSpeed: 20
+    addInterferingUes: 0
+    aerialUeRatio: 0
+    topology: triangle
+    bandwidthMhz: 30
+    numerology: 1
+    trafficRateMbps: 35          # TCP offered-load cap, same as every other cell
+    tcpSndBufBytes: 1048576      # frozen-regime value; arm F changes it
+
+  # 2x2 design: trigger axis = RLC TX cap (does the startup burst overflow?),
+  # fatality axis = delayed-ACK timer (does a collapsed window recover?).
+  scenarios:
+    # A reference: the frozen regime = trapped
+    - {tag: A-ref-180k-dack200,   rlcTxBufferBytes: 180000,  tcpMinRtoMs: 200,  tcpDelAckTimeoutMs: 200, tcpDelAckCount: 2}
+    # B trigger fixed only (no RLC overflow, timer race still latent)
+    - {tag: B-cap1m-dack200,      rlcTxBufferBytes: 1048576, tcpMinRtoMs: 200,  tcpDelAckTimeoutMs: 200, tcpDelAckCount: 2}
+    # C MECHANISM TEST: fatality fixed only (drops unchanged at ~400/seed)
+    - {tag: C-180k-dack40,        rlcTxBufferBytes: 180000,  tcpMinRtoMs: 200,  tcpDelAckTimeoutMs: 40,  tcpDelAckCount: 2}
+    # D canonical candidate: both axes fixed, MinRto stays at Linux's 200 ms
+    - {tag: D-cap1m-dack40,       rlcTxBufferBytes: 1048576, tcpMinRtoMs: 200,  tcpDelAckTimeoutMs: 40,  tcpDelAckCount: 2}
+    # E alternative fatality fix: sender-side RTO floor at the ns-3/RFC default
+    - {tag: E-cap1m-mr1000,       rlcTxBufferBytes: 1048576, tcpMinRtoMs: 1000, tcpDelAckTimeoutMs: 200, tcpDelAckCount: 2}
+    # F latency-optimised alternative: smaller budget (1.35x BDP at 50 MHz)
+    - {tag: F-sb512-cap500-dack40, tcpSndBufBytes: 524288, rlcTxBufferBytes: 500000, tcpMinRtoMs: 200, tcpDelAckTimeoutMs: 40, tcpDelAckCount: 2}
+
+    # G recommended canonical: the 1 MiB cap of D still discards ~118 PDUs/seed
+    # (it is exactly the SndBuf size), so size the link buffer to hold the
+    # sender's window plus one BDP (1.0 + ~0.4 MiB -> 2 MiB); the earlier
+    # 1 MiB/2 MB arm measured 0 drops. Same Linux-like timers as D.
+    - {tag: G-cap2m-dack40,       rlcTxBufferBytes: 2097152, tcpMinRtoMs: 200,  tcpDelAckTimeoutMs: 40,  tcpDelAckCount: 2}
+
+    # Not run: DelAckCount 1 (ACK every segment) also breaks the race, but it
+    # doubles the DL ACK volume, which drives the gNB single-beam measurement
+    # artifact (#32) - unsuitable as a canonical setting.
+    # - {tag: G-180k-dackcount1, rlcTxBufferBytes: 180000, tcpMinRtoMs: 200, tcpDelAckTimeoutMs: 200, tcpDelAckCount: 1}
+

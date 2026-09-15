@@ -1,6 +1,3 @@
-# REGIME: canonical (adopted 2026-09-11; RLC TX 2 MiB, TCP SndBuf 1 MiB,
-# MinRto 200 ms, DelAck 40 ms x2). Pre-canonical versions of this and the
-# rest of the campaign live in evaluation-scenarios/_archive/.
 # nr-rl-handover-a3-baseline-30mhz-quic-ul.yaml — A3 baseline (QUIC BBR, UL),
 # no interference variant. Transport-comparison cell against the TCP config
 # (nr-rl-handover-a3-baseline-30mhz-tcp-ul.yaml) on identical geometry and
@@ -43,7 +40,7 @@ evaluation:
     errorModel: eesm-ir-t1
     channelUpdateMs: 20
     trafficRateMbps: 35         # near-capacity load (measured 30 MHz n1 UL ceiling ~33 Mbps)
-    rlcTxBufferBytes: 2097152  # canonical: RLC TX cap >= TCP SndBuf + one BDP
+    rlcTxBufferBytes: 1048576    # MANDATORY for QUIC: must be >= the 1 MiB QUIC
                                  # socket/stream buffers, otherwise the startup
                                  # burst overruns the UE RLC TX buffer and the
                                  # flow wedges ~1.8 s in (#31 correction / #34).

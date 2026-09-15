@@ -18,8 +18,8 @@ EXTRA=""; [[ "${DRY_RUN:-0}" == "1" ]] && EXTRA="--dry-run"
 # in .../nr-rl-handover/results/ next to the other campaigns.
 cd "$ROOT/contrib/defiance/examples/nr-rl-handover"
 
-for cfg in capacity-probe.yaml \
-           tcp-vs-udp.yaml \
+for cfg in capacity-probe-canonical.yaml \
+           transport-comparison.yaml \
            tcp-variants.yaml \
            a3-sweep.yaml \
            topology-hexgrid.yaml \

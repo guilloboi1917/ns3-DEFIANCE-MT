@@ -1,6 +1,3 @@
-# REGIME: canonical (adopted 2026-09-11; RLC TX 2 MiB, TCP SndBuf 1 MiB,
-# MinRto 200 ms, DelAck 40 ms x2). Pre-canonical versions of this and the
-# rest of the campaign live in evaluation-scenarios/_archive/.
 # nr-rl-handover-a3-baseline-30mhz-udp-ul.yaml — A3 baseline (UDP, UL), both
 # interference variants. Ground-truth reference of a conventional handover
 # policy (A3) for the UL agent evals; same canonical config and pinned RNG
@@ -20,7 +17,6 @@ evaluation:
   sim_time: 50
 
   common:
-    rlcTxBufferBytes: 2097152  # canonical: RLC TX cap >= TCP SndBuf + one BDP
     topology: triangle
     intersiteDistance: 500
     uavMobility: random-waypoint

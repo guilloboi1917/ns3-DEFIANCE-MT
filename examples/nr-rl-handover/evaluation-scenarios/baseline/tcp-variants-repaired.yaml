@@ -1,0 +1,56 @@
+# tcp-variants-repaired.yaml — the B1 congestion-control matrix re-run in the
+# REPAIRED transport buffer/timer regime (2026-09-08).
+#
+# Why: the original B1 run used `--rlcTxBufferBytes=180000` with a 1 MiB TCP
+# socket buffer (`--tcpSndBufBytes`, then hard-coded) and `MinRto` pinned to
+# 200 ms. The startup burst overruns the 180 kB UE RLC TX buffer at 1.4-1.8 s
+# (silent PDCP discard, ~400-550 PDUs), and loss-based CCs then collapse into a
+# deterministic 1-segment RTO regime (cwnd frozen at 1 MSS, 3.4-3.6 pkt/s for
+# the rest of the episode) because the per-segment uplink access latency at low
+# window (~370 ms) exceeds the 200 ms RTO floor. BBR is immune, so the original
+# spread (BBR 22.87 >> Cubic 10.23 > ... ) measured recovery robustness against
+# a configuration artifact rather than steady-state CC quality.
+# Evidence + sensitivity tables: BUGS-ISSUES #34, results/rlc-buffer-sweep,
+# results/buffer-2d-sweep; analysis: thesis KB buffer-timer-regime.md.
+#
+# Repaired settings (only these two differ from baseline/tcp-variants.yaml):
+#   rlcTxBufferBytes: 1048576   == the 1 MiB socket buffer -> no RLC overflow
+#   tcpMinRtoMs: 1000           == ns-3 / RFC 6298 default (was a deliberate
+#                                  deviation to the Linux 200 ms)
+# The TCP socket buffer stays at the campaign value (1 MiB) so the
+# transport-side environment is unchanged; only the link-buffer/timer regime is
+# repaired. No agents are involved, so no retraining is needed.
+#
+# Cell: 30 MHz n1, no interferers, [50-200] m @ 20 m/s, TCP cap 35 Mbps,
+# RLC AM, 50 s, 20 seeds.
+#
+# Run:
+#   python3 .../run-evaluations.py .../evaluation-scenarios/baseline/tcp-variants-repaired.yaml #       --jobs 6 --analyze
+
+evaluation:
+  name: tcp-variants-repaired
+  mode: a3
+  n_seeds: 20
+  sim_time: 50
+  common:
+    flowDirection: ul
+    transportProtocol: tcp
+    uavMobility: random-waypoint
+    startHeight: 50
+    endHeight: 200
+    ueSpeed: 20
+    addInterferingUes: 0
+    aerialUeRatio: 0
+    topology: triangle
+    bandwidthMhz: 30
+    numerology: 1
+    trafficRateMbps: 35        # TCP cap (offered load), same as the RL evals
+    rlcTxBufferBytes: 1048576  # == the 1 MiB socket buffer: no RLC TX overflow
+    tcpMinRtoMs: 1000          # ns-3 / RFC 6298 default (was 200 ms)
+  scenarios:
+    - {tag: bbr,     tcpVariant: TcpBbr}
+    - {tag: cubic,   tcpVariant: TcpCubic}
+    - {tag: newreno, tcpVariant: TcpNewReno}
+    - {tag: westwoodplus, tcpVariant: TcpWestwoodPlus}
+    - {tag: vegas, tcpVariant: TcpVegas}
+    - {tag: veno, tcpVariant: TcpVeno}

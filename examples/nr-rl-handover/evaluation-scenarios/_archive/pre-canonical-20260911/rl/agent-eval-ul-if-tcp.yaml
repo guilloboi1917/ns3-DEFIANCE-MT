@@ -1,6 +1,3 @@
-# REGIME: canonical (adopted 2026-09-11; RLC TX 2 MiB, TCP SndBuf 1 MiB,
-# MinRto 200 ms, DelAck 40 ms x2). Pre-canonical versions of this and the
-# rest of the campaign live in evaluation-scenarios/_archive/.
 # Transfer eval (2026-09-02): the no-if TCP policy (beta 1.0,
 # PPO_2026-09-02_00-07-41) evaluated on the if scenario (4 aerial
 # interferers) — the run behind the transfer-win result (KB §8). OnOff
@@ -19,15 +16,10 @@
 evaluation:
   name: agent-eval-ul-if-tcp
   mode: rl
-  checkpoint: /home/nisaak/masterthesis-ns3/ns-3-dev/contrib/defiance/examples/nr-rl-handover/checkpoints/PPO_2026-09-02_20-53-50  # if TCP (beta 1.0); auto-appends best_checkpoint
+  checkpoint: /home/nisaak/ray_results/PPO_2026-09-02_20-53-50  # if TCP (beta 1.0); auto-appends best_checkpoint
   n_seeds: 20
   sim_time: 50                 # must match the training simDuration
   common:
-    tcpSndBufBytes: 1048576  # canonical: SndBuf >= 2x BDP
-    rlcTxBufferBytes: 2097152  # canonical: RLC TX cap >= SndBuf + one BDP
-    tcpMinRtoMs: 200  # canonical: Linux TCP_RTO_MIN
-    tcpDelAckTimeoutMs: 40  # canonical: Linux TCP_DELACK_MIN (breaks the delayed-ACK/RTO race)
-    tcpDelAckCount: 2
     transportProtocol: tcp
     flowDirection: ul           # 3GPP UAV primary direction (UL)
     uavMobility: random-waypoint

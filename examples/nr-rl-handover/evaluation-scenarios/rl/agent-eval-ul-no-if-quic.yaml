@@ -1,0 +1,51 @@
+# REGIME: canonical (adopted 2026-09-11; RLC TX 2 MiB, TCP SndBuf 1 MiB,
+# MinRto 200 ms, DelAck 40 ms x2). Pre-canonical versions of this and the
+# rest of the campaign live in evaluation-scenarios/_archive/.
+# agent-eval-ul-no-if-quic.yaml -- CANONICAL REGIME, QUIC transport.
+# Zero-shot cross-transport evaluation of the headline no-if checkpoint
+# (PPO_2026-09-07_13-52-01, beta_H 5.0) over QUIC instead of TCP. The agent
+# observes radio state only (RSRP/SINR per cell) and rewards sink goodput, so
+# the transport is a pure data-plane swap: this is the QUIC leg of the
+# transport-robustness set, to be read next to agent-eval-ul-no-if-tcp-beta5.yaml
+# (same checkpoint, TCP) and against the A3 QUIC comparators
+# nr-rl-handover-a3-baseline-30mhz-quic-ul{,-m5t256}.yaml.
+#
+# Canonical transport regime adopted 2026-09-08 (arm G of
+# baseline/delack-race.yaml; see KB buffer-timer-regime.md 8c):
+#   rlcTxBufferBytes 2 MiB, DelAck 40 ms (TCP-only knobs kept for symmetry).
+# QUIC has no TCP MinRto/DelAck equivalent (RFC 9002 PTO); its socket/stream
+# buffers are set in the scenario under transportProtocol == "quic".
+#
+# Run:
+#   python3 contrib/defiance/examples/nr-rl-handover/run-evaluations.py \
+#       contrib/defiance/examples/nr-rl-handover/evaluation-scenarios/rl/agent-eval-ul-no-if-quic.yaml \
+#       --jobs 4 --analyze
+
+evaluation:
+  name: agent-eval-ul-no-if-quic
+  mode: rl
+  checkpoint: /home/nisaak/masterthesis-ns3/ns-3-dev/contrib/defiance/examples/nr-rl-handover/checkpoints/PPO_2026-09-07_13-52-01/  # no-if TCP, beta_H 5.0, 100 iters; auto-appends best_checkpoint
+  n_seeds: 20
+  sim_time: 50                 # must match the training simDuration
+  common:
+    rlcTxBufferBytes: 2097152  # canonical radio buffer; >= QUIC startup burst
+    transportProtocol: quic
+    flowDirection: ul           # 3GPP UAV primary direction (UL)
+    uavMobility: random-waypoint
+    startHeight: 50
+    endHeight: 200
+    topology: triangle
+    addInterferingUes: 0
+    aerialUeRatio: 0.0
+    interfererMobility: static  # "waypoint" = legacy random flight
+    bandwidthMhz: 30
+    numerology: 1
+    errorModel: eesm-ir-t1
+    channelUpdateMs: 20         # channel spatial-consistency update period (ms)
+    trafficRateMbps: 35         # same offered load as the TCP leg
+    rlRewardRefMbps: 35         # must match the training config
+  scenarios:
+    - tag: triangle-ul-no-if-quic
+      topology: triangle
+      addInterferingUes: 0
+      aerialUeRatio: 0.0

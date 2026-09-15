@@ -1,6 +1,14 @@
-# REGIME: canonical (adopted 2026-09-11; RLC TX 2 MiB, TCP SndBuf 1 MiB,
-# MinRto 200 ms, DelAck 40 ms x2). Pre-canonical versions of this and the
-# rest of the campaign live in evaluation-scenarios/_archive/.
+# agent-eval-ul-if-tcp-canonical.yaml -- CANONICAL REGIME COPY of agent-eval-ul-if-tcp.yaml.
+# Zero-shot re-evaluation of the frozen checkpoints in the canonical regime.
+# Canonical transport regime adopted 2026-09-08 (arm G of
+# baseline/delack-race.yaml; see KB buffer-timer-regime.md 8c):
+#   tcpSndBufBytes 1 MiB / rlcTxBufferBytes 2 MiB / tcpMinRtoMs 200 /
+#   tcpDelAckTimeoutMs 40 / tcpDelAckCount 2.
+# Measured effect vs the frozen regime (NewReno, 30 MHz n1): trapped
+# seeds 5/10 -> 0/10, silent RLC discards 401 -> 0 per seed, median
+# delivery 21.3 -> 49.6 MB, median RTT 54 -> 66 ms.
+# NOTE this is a different environment from the one the RL checkpoints
+# were trained in: use it for zero-shot transfer evaluation first.
 # Transfer eval (2026-09-02): the no-if TCP policy (beta 1.0,
 # PPO_2026-09-02_00-07-41) evaluated on the if scenario (4 aerial
 # interferers) — the run behind the transfer-win result (KB §8). OnOff
@@ -17,17 +25,17 @@
 # meta.yaml when not listed here; explicit `common:` values override.
 
 evaluation:
-  name: agent-eval-ul-if-tcp
+  name: agent-eval-ul-if-tcp-canonical
   mode: rl
-  checkpoint: /home/nisaak/masterthesis-ns3/ns-3-dev/contrib/defiance/examples/nr-rl-handover/checkpoints/PPO_2026-09-02_20-53-50  # if TCP (beta 1.0); auto-appends best_checkpoint
+  checkpoint: /home/nisaak/ray_results/PPO_2026-09-02_20-53-50  # if TCP (beta 1.0); auto-appends best_checkpoint
   n_seeds: 20
   sim_time: 50                 # must match the training simDuration
   common:
-    tcpSndBufBytes: 1048576  # canonical: SndBuf >= 2x BDP
-    rlcTxBufferBytes: 2097152  # canonical: RLC TX cap >= SndBuf + one BDP
-    tcpMinRtoMs: 200  # canonical: Linux TCP_RTO_MIN
-    tcpDelAckTimeoutMs: 40  # canonical: Linux TCP_DELACK_MIN (breaks the delayed-ACK/RTO race)
-    tcpDelAckCount: 2
+    tcpSndBufBytes: 1048576  # >= 2x BDP at the 50 MHz cell (canonical, G)
+    rlcTxBufferBytes: 2097152  # >= SndBuf + one BDP -> 0 NrRlc::TxDrop (canonical, G)
+    tcpMinRtoMs: 200  # Linux TCP_RTO_MIN (canonical, G)
+    tcpDelAckTimeoutMs: 40  # Linux TCP_DELACK_MIN; breaks the delayed-ACK/RTO race (canonical, G)
+    tcpDelAckCount: 2  # keep 2: does not inflate DL ACK volume (beam artifact #32)
     transportProtocol: tcp
     flowDirection: ul           # 3GPP UAV primary direction (UL)
     uavMobility: random-waypoint

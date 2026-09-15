@@ -1,6 +1,3 @@
-# REGIME: canonical (adopted 2026-09-11; RLC TX 2 MiB, TCP SndBuf 1 MiB,
-# MinRto 200 ms, DelAck 40 ms x2). Pre-canonical versions of this and the
-# rest of the campaign live in evaluation-scenarios/_archive/.
 # nr-rl-handover-a3-baseline-30mhz-tcp-ul.yaml — A3 baseline (TCP, UL), no
 # interference variant. Controlled comparison cell for the TCP agent evals
 # (agent-eval-ul-*-tcp, trained at 30 MHz n1): same cell and offered load,
@@ -20,11 +17,6 @@ evaluation:
   sim_time: 50
 
   common:
-    tcpSndBufBytes: 1048576  # canonical: SndBuf >= 2x BDP
-    rlcTxBufferBytes: 2097152  # canonical: RLC TX cap >= SndBuf + one BDP
-    tcpMinRtoMs: 200  # canonical: Linux TCP_RTO_MIN
-    tcpDelAckTimeoutMs: 40  # canonical: Linux TCP_DELACK_MIN (breaks the delayed-ACK/RTO race)
-    tcpDelAckCount: 2
     topology: triangle
     intersiteDistance: 500
     uavMobility: random-waypoint
