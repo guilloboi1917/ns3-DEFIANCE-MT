@@ -18,6 +18,7 @@ uint32_t seed = 0;                // Seed for RNG
 uint32_t runId = 0;
 std::string trialName = "1";
 std::string tcpVariant = "TcpBbr";
+std::string recoveryType = "TcpPrrRecovery";
 std::string uavMobility = "random-waypoint";
 std::string topology = "triangle";
 double startHeight = 50.0; // m
@@ -44,7 +45,13 @@ double rlRewardRefMbps = 15.0;                ///< Reward/obs goodput reference 
 std::string rlRewardGoodputShape = "compl_pwr";   ///< R_G shape: deng | linear | exp_decay | compl_pwr
 double rlRewardGoodputAlpha = 3.0;            ///< exp_decay rate
 double rlRewardGoodputP = 0.4;                ///< compl_pwr exponent
-uint32_t rlcTxBufferBytes = 180000;          ///< RLC TX buffer cap (0 = unlimited)
+uint32_t rlcTxBufferBytes = 2097152;         ///< RLC TX buffer cap (0 = unlimited)
+uint32_t tcpSndBufBytes = (1 << 20);         ///< TCP send/receive socket buffer in bytes
+uint32_t tcpMinRtoMs = 200;                  ///< TCP MinRto in ms
+// 40 ms keeps the delayed-ACK timer below the 200 ms MinRto floor; at the
+// 200 ms ns-3 default a one-segment window ACKs and times out in lockstep.
+uint32_t tcpDelAckTimeoutMs = 40;            ///< TCP receiver delayed-ACK timeout in ms
+uint32_t tcpDelAckCount = 2;                 ///< TCP receiver segments before an immediate ACK
 std::string errorModel = "eesm-ir-t1";       ///< PHY error model: eesm-ir-t1 (default) | eesm-ir-t2 | eesm-cc-t2 | eesm-cc-t1 | lte-mi
 uint32_t channelUpdateMs = 20;               ///< channel UpdatePeriod ms (0 = disabled/module default; larger periods decorrelate the fading and square-wave the obs SINR)
 std::string channelModel = "umav";          ///< channel: umav (3GPP TR 38.901 UMa-AV, default) | tworay (TwoRaySpectrumPropagationLossModel)
@@ -145,6 +152,9 @@ main(int argc, char* argv[])
         "tcpVariant",
         "TCP variant to use (TcpHarl, TcpNewReno, TcpCubic, TcpWestwoodplus, TcpVeno, TcpBbr)",
         tcpVariant);
+    cmd.AddValue("recoveryType",
+                 "TCP recovery algorithm (TcpPrrRecovery, TcpClassicRecovery)",
+                 recoveryType);
     cmd.AddValue("uavMobility",
                  "UAV mobility: \"constant\", \"ascend-random\", or \"random-waypoint\"",
                  uavMobility);
@@ -228,6 +238,23 @@ main(int argc, char* argv[])
     cmd.AddValue("rlcTxBufferBytes",
                  "RLC TX buffer cap in bytes for UM and AM (0 = unlimited)",
                  rlcTxBufferBytes);
+    cmd.AddValue("tcpSndBufBytes",
+                 "TCP send/receive socket buffer in bytes (default 1 MiB; the ns-3 "
+                 "default 128 KiB caps the transport at ~13 Mbps on this path)",
+                 tcpSndBufBytes);
+    cmd.AddValue("tcpMinRtoMs",
+                 "TCP MinRto floor in ms (default 200 = Linux TCP_RTO_MIN; ns-3/RFC 6298 "
+                 "default is 1000)",
+                 tcpMinRtoMs);
+    cmd.AddValue("tcpDelAckTimeoutMs",
+                 "TCP receiver delayed-ACK timeout in ms (ns-3 default 200). At a "
+                 "1-segment window this timer races the MinRto floor: 200/200 traps "
+                 "loss-based CCs at 1 MSS (BUGS-ISSUES #34)",
+                 tcpDelAckTimeoutMs);
+    cmd.AddValue("tcpDelAckCount",
+                 "TCP receiver segment count that triggers an immediate ACK "
+                 "(ns-3 default 2; 1 = ACK every segment)",
+                 tcpDelAckCount);
     cmd.AddValue("errorModel",
                  "PHY error model: eesm-ir-t1 (default) | eesm-ir-t2 | eesm-cc-t2 | "
                  "eesm-cc-t1 | lte-mi (NrLteMiErrorModel)",
@@ -275,12 +302,19 @@ main(int argc, char* argv[])
 
     if (g_transportProtocol == "quic")
     {
-        std::cout << "WARNING: transportProtocol=quic is NOT usable. The ns-3 "
-                     "QUIC module (contrib/quic) stalls ~2 s into any bulk flow "
-                     "(sender wedges after the send-notify path fills its "
-                     "buffers), on its own P2P example with 0% and 2% loss. "
-                     "Use udp or tcp; QUIC integration kept only for the record."
-                  << std::endl;
+        // The 2026-09-02 "QUIC is not usable" verdict was a trigger artifact:
+        // at a small RLC TX buffer the startup burst overruns the buffer and
+        // the sender wedges ~1.8 s in (BUGS-ISSUES #31 correction, #34). At
+        // 512 kB and above the ENTEL-WNG fork runs the full 50 s episode.
+        if (rlcTxBufferBytes != 0 && rlcTxBufferBytes < 524288)
+        {
+            std::cout << "WARNING: transportProtocol=quic with "
+                      << "rlcTxBufferBytes=" << rlcTxBufferBytes
+                      << " < 524288. The QUIC startup burst overruns the UE RLC TX "
+                         "buffer and the flow wedges ~1.8 s in (BUGS-ISSUES #31 "
+                         "correction / #34). Use --rlcTxBufferBytes=2097152."
+                      << std::endl;
+        }
     }
 
     scenarioSetup(g_flowDirection,
@@ -323,6 +357,10 @@ main(int argc, char* argv[])
                   rlRewardGoodputAlpha,
                   rlRewardGoodputP,
                   rlcTxBufferBytes,
+                  tcpSndBufBytes,
+                  tcpMinRtoMs,
+                  tcpDelAckTimeoutMs,
+                  tcpDelAckCount,
                   errorModel,
                   channelUpdateMs,
                   numerology,

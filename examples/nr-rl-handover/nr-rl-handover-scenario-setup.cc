@@ -28,6 +28,7 @@
 #include "ns3/tcp-bbr.h"
 #include "ns3/tcp-l4-protocol.h"
 #include "ns3/tcp-rate-ops.h"
+#include "ns3/tcp-recovery-ops.h"
 #include "ns3/tcp-socket-base.h"
 #include "ns3/quic-helper.h"
 
@@ -53,6 +54,7 @@ int16_t g_currentCellId = 1;
 
 // Application Connection succeed/fail callbacks
 extern std::string g_flowDirection;
+extern std::string recoveryType;
 extern uint32_t g_senderNodeId;
 extern uint32_t g_receiverNodeId;
 extern bool g_tcpConnected;
@@ -61,6 +63,14 @@ extern uint64_t g_totalRxBytes;
 extern uint32_t g_totalRetransmissions;
 extern double g_rttSumMs;
 extern uint32_t g_rttSamples;
+
+// Application start times (s). The QUIC flow starts after the policy's earliest
+// possible first handover (1.2025 s) so the handshake is not initiated into the
+// weak pre-handover cell. Recorded in meta.yaml as appStartS so the analyzer can
+// normalise goodput by the offered window instead of the episode length.
+static constexpr double kAppStartS = 1.0;
+static constexpr double kQuicAppStartS = 1.5;
+static constexpr double kQuicSinkLeadS = 0.05;
 
 void
 NotifyConnectionSucceeded(Ptr<Socket> socket, const Address& local, const Address& remote)
@@ -383,6 +393,17 @@ UlHarqFeedbackLogger(uint16_t rnti, bool isReceivedOk)
     }
 }
 
+// UE RLC TX-buffer drop logger (NrRlc::TxDrop on the uplink DRB)
+void
+RlcTxDropLogger(Ptr<const Packet> packet)
+{
+    if (g_logging)
+    {
+        std::ofstream& dropFile = LogStream("nr-rl-rlc-tx-drop.csv");
+        dropFile << Simulator::Now().GetSeconds() << "," << packet->GetSize() << "\n";
+    }
+}
+
 // UL RX packet logger (gNB spectrum PHY, post-beamforming MIMO SINR)
 void
 UlRxPacketLogger(uint16_t cellId, RxPacketTraceParams params)
@@ -544,7 +565,7 @@ MobilityCourseChange(std::string context, Ptr<const MobilityModel> model)
  * 1 m antenna offset); orientation is read back from the antenna model:
  * bearing angle (GetAlpha, radians in [-pi, pi], 0 = +x axis, counter-
  * clockwise) and downtilt (GetBeta, radians), both converted to degrees.
- * Written once at setup; consumed by plot-uav-path.py to draw translucent
+ * Written once at setup; consumed by plots/plot-uav-path.py to draw translucent
  * sector cones over the UAV path.
  */
 void
@@ -816,7 +837,11 @@ scenarioSetup(std::string flowDirection = "ul",
               std::string rlRewardGoodputShape = "compl_pwr",
               double rlRewardGoodputAlpha = 3.0,
               double rlRewardGoodputP = 0.4,
-              uint32_t rlcTxBufferBytes = 180000, // RLC TX buffer cap (0 = unlimited)
+              uint32_t rlcTxBufferBytes = 2097152, // RLC TX buffer cap (0 = unlimited)
+              uint32_t tcpSndBufBytes = (1 << 20), // TCP send/receive socket buffer in bytes
+              uint32_t tcpMinRtoMs = 200,         // TCP MinRto floor in ms
+              uint32_t tcpDelAckTimeoutMs = 40,  // TCP delayed-ACK timeout in ms
+              uint32_t tcpDelAckCount = 2,        // TCP segments before an immediate ACK
               std::string errorModel = "eesm-ir-t1", // eesm-ir-t1 | eesm-ir-t2 | eesm-cc-t2 | eesm-cc-t1 | lte-mi
               uint32_t channelUpdateMs = 20,       // channel UpdatePeriod ms (0 = disabled/module default)
               uint32_t numerology = 0,             // 0 = 15 kHz SCS, 1 = 30 kHz SCS (n78 typical)
@@ -854,8 +879,8 @@ scenarioSetup(std::string flowDirection = "ul",
         std::filesystem::create_directories(g_outputDir);
         // Clear data files and write one-time CSV headers (the loggers below
         // only ever append). Every log file is self-describing: header rows
-        // name the columns, so the Python readers (plot-nr-rl-stats.py,
-        // run-evaluation.py, feature-importance.py, ...) parse by name.
+        // name the columns, so the Python readers (plots/plot-nr-rl-stats.py,
+        // analysis/feature-importance.py, ...) parse by name.
         // gnb-antennas.csv is excluded: LogGnbAntennas() writes its own header
         // (truncate mode). Keep this map in sync with the loggers and readers.
         const std::vector<std::pair<std::string, std::string>> csvHeaders = {
@@ -872,6 +897,7 @@ scenarioSetup(std::string flowDirection = "ul",
             {"sink-packets.csv",     "time,packetSizeBytes"},
             {"source-packets.csv",   "time,packetSizeBytes"},
             {"retransmissions.csv",  "time,packetSizeBytes"},
+            {"nr-rl-rlc-tx-drop.csv", "time,packetSizeBytes"},
             {"rl_obs.csv",           "time,serving_rsrp,serving_rsrq,slot_rsrp_0,slot_rsrp_1,slot_rsrp_2,rsrp_delta_0,rsrp_delta_1,rsrp_delta_2,dl_sinr,time_since_ho,norm_goodput,ho_count_10s,ul_sinr,ul_rb_util,ul_sched_ue,d_serving_rsrp,d_serving_sinr,d_serving_rsrq,d_norm_goodput,d_margin_best,d_slot_rsrp_0,d_slot_rsrp_1,d_slot_rsrp_2,heading_x,heading_y,heading_z,pos_x,pos_y,pos_z,pos2s_x,pos2s_y,pos2s_z"},
             {"rl_reward.csv",        "time,goodputMbps,dynRefMbps,dynMinMbps,normGoodputRaw,normGoodput,R_G,I_ho,R_H,pingPong,reward"},
             {"rl_action.csv",        "time,currentCellId,targetCellId,srcRsrpDbm,targetRsrpDbm"},
@@ -907,7 +933,19 @@ scenarioSetup(std::string flowDirection = "ul",
         metaOut << "seed: " << seed << "\n";
         metaOut << "runId: " << runId << "\n";
         metaOut << "trialName: " << trialName << "\n";
+        metaOut << "appStartS: " << ((transportProtocol == "quic") ? kQuicAppStartS : kAppStartS) << "\n";
         metaOut << "tcpVariant: " << tcpVariant << "\n";
+        metaOut << "recoveryType: " << recoveryType << "\n";
+        metaOut << "numerology: " << numerology << "\n";
+        metaOut << "rlcTxBufferBytes: " << rlcTxBufferBytes << "\n";
+        metaOut << "tcpSndBufBytes: " << tcpSndBufBytes << "\n";
+        metaOut << "tcpMinRtoMs: " << tcpMinRtoMs << "\n";
+        metaOut << "tcpDelAckTimeoutMs: " << tcpDelAckTimeoutMs << "\n";
+        metaOut << "tcpDelAckCount: " << tcpDelAckCount << "\n";
+        metaOut << "errorModel: " << errorModel << "\n";
+        metaOut << "channelUpdateMs: " << channelUpdateMs << "\n";
+        metaOut << "channelModel: " << channelModel << "\n";
+        metaOut << "interfererMobility: " << interfererMobility << "\n";
         metaOut << "uavMobility: " << uavMobility << "\n";
         metaOut << "topology: " << topology << "\n";
         metaOut << "startHeight: " << startHeight << "\n";
@@ -1095,16 +1133,26 @@ scenarioSetup(std::string flowDirection = "ul",
     Config::SetDefault("ns3::NrRlcAm::MaxTxBufferSize", UintegerValue(rlcTxBufferBytes)); // parity for TCP (AM)
 
     // Reduce TCP MinRTO from RFC 6298 default (1s) to Linux standard (200ms)
-    // to recover faster from handover-induced packet loss.
-    Config::SetDefault("ns3::TcpSocketBase::MinRto", TimeValue(MilliSeconds(200)));
+    // to recover faster from handover-induced packet loss. NOTE: on this path
+    // the per-segment uplink access latency at a near-empty RLC buffer (SR/BSR
+    // -> grant -> TB -> DL ACK) is ~370 ms, i.e. above this floor - the
+    // --tcpMinRtoMs ablation exists to measure that interaction.
+    Config::SetDefault("ns3::TcpSocketBase::MinRto", TimeValue(MilliSeconds(tcpMinRtoMs)));
+
+    // Receiver-side delayed ACK. ns-3 defaults to 200 ms / 2 segments; with a
+    // 1-segment window (any collapse to cwnd = 1 MSS) the 200 ms timer races the
+    // 200 ms MinRto floor and the sender always loses, so loss-based CCs never
+    // leave 1 MSS. Linux ACKs a lone segment after ~40 ms (TCP_DELACK_MIN).
+    Config::SetDefault("ns3::TcpSocket::DelAckTimeout", TimeValue(MilliSeconds(tcpDelAckTimeoutMs)));
+    Config::SetDefault("ns3::TcpSocket::DelAckCount", UintegerValue(tcpDelAckCount));
 
     // Socket buffers sized above the BDP (~0.4 MB at the ~80 ms saturation
     // RTT and the 50 Mbps link); the 128 KB ns-3 default would cap the
     // transport at ~13 Mbps, making it buffer-limited instead of radio-limited.
     if (transportProtocol == "tcp")
     {
-        Config::SetDefault("ns3::TcpSocket::SndBufSize", UintegerValue(1 << 20));
-        Config::SetDefault("ns3::TcpSocket::RcvBufSize", UintegerValue(1 << 20));
+        Config::SetDefault("ns3::TcpSocket::SndBufSize", UintegerValue(tcpSndBufBytes));
+        Config::SetDefault("ns3::TcpSocket::RcvBufSize", UintegerValue(tcpSndBufBytes));
     }
     else if (transportProtocol == "quic")
     {
@@ -1162,6 +1210,21 @@ scenarioSetup(std::string flowDirection = "ul",
     else
     {
         NS_FATAL_ERROR("Unknown TCP variant: " << tcpVariant);
+    }
+    // TCP recovery algorithm (TcpPrrRecovery is the ns-3 default).
+    if (recoveryType == "TcpClassicRecovery")
+    {
+        Config::SetDefault("ns3::TcpL4Protocol::RecoveryType",
+                           TypeIdValue(TcpClassicRecovery::GetTypeId()));
+    }
+    else if (recoveryType == "TcpPrrRecovery")
+    {
+        Config::SetDefault("ns3::TcpL4Protocol::RecoveryType",
+                           TypeIdValue(TcpPrrRecovery::GetTypeId()));
+    }
+    else
+    {
+        NS_FATAL_ERROR("Unknown TCP recovery type: " << recoveryType);
     }
     // Set TCP ConnTimeout to be shorter, for quicker establishment (default 3s)
     Config::SetDefault("ns3::TcpSocket::ConnTimeout", TimeValue(Seconds(1)));
@@ -1748,8 +1811,8 @@ scenarioSetup(std::string flowDirection = "ul",
         tcpSource.SetAttribute("OnTime", StringValue("ns3::ConstantRandomVariable[Constant=1]"));
         tcpSource.SetAttribute("OffTime", StringValue("ns3::ConstantRandomVariable[Constant=0]"));
         auto sourceApp = tcpSource.Install(sourceNode);
-        sourceApp.Start(Seconds(1.0));
-        sinkApp.Start(Seconds(1.0));
+        sourceApp.Start(Seconds(kAppStartS));
+        sinkApp.Start(Seconds(kAppStartS));
 
         // OnOffApplication has no ConnectionSucceeded/ConnectionFailed traces
         // (BulkSend-only); TCP connection state is tracked via the socket
@@ -1838,8 +1901,8 @@ scenarioSetup(std::string flowDirection = "ul",
         udpSource.SetAttribute("OnTime", StringValue("ns3::ConstantRandomVariable[Constant=1]"));
         udpSource.SetAttribute("OffTime", StringValue("ns3::ConstantRandomVariable[Constant=0]"));
         auto sourceApp = udpSource.Install(sourceNode);
-        sourceApp.Start(Seconds(1.0));
-        sinkApp.Start(Seconds(1.0));
+        sourceApp.Start(Seconds(kAppStartS));
+        sinkApp.Start(Seconds(kAppStartS));
 
         Config::ConnectWithoutContext("/NodeList/" + std::to_string(uavNodeId) +
                                           "/DeviceList/*/NrUeRrc/HandoverEndOk",
@@ -1857,16 +1920,20 @@ scenarioSetup(std::string flowDirection = "ul",
     }
     else
     {
-        // QUIC: BulkSend over a QUIC socket — the module's supported sender
-        // pattern (its own examples use it). Greedy full-buffer (MaxBytes 0):
-        // the offered-load cap (trafficRateMbps) applies to the OnOff
-        // transports only; QUIC BBR paces to the link.
-        BulkSendHelper quicSource("ns3::QuicSocketFactory", Address());
-        quicSource.SetAttribute("Remote", AddressValue(sinkAddress));
-        quicSource.SetAttribute("SendSize", UintegerValue(1400));
+        // QUIC: OnOff over a QUIC socket, matching TCP/UDP so the offered
+        // load (trafficRateMbps) is capped identically across transports.
+        // The flow starts at 1.5 s, after the policy's first handover (which
+        // can occur as early as 1.2 s): an Initial sent into the weak initial
+        // serving cell is lost and this fork does not recover the handshake.
+        // The sink starts 50 ms early so the listener is bound first.
+        OnOffHelper quicSource(socketFactory, sinkAddress);
+        quicSource.SetAttribute("DataRate", DataRateValue(DataRate(onOffDataRateBps)));
+        quicSource.SetAttribute("PacketSize", UintegerValue(1400));
+        quicSource.SetAttribute("OnTime", StringValue("ns3::ConstantRandomVariable[Constant=1]"));
+        quicSource.SetAttribute("OffTime", StringValue("ns3::ConstantRandomVariable[Constant=0]"));
         auto sourceApp = quicSource.Install(sourceNode);
-        sourceApp.Start(Seconds(1.05)); // sink listens at 1.0 s; 1-RTT handshake
-        sinkApp.Start(Seconds(1.0));
+        sourceApp.Start(Seconds(kQuicAppStartS));
+        sinkApp.Start(Seconds(kQuicAppStartS - kQuicSinkLeadS));
 
         Config::ConnectWithoutContext("/NodeList/" + std::to_string(uavNodeId) +
                                           "/DeviceList/*/NrUeRrc/HandoverEndOk",
@@ -1883,7 +1950,7 @@ scenarioSetup(std::string flowDirection = "ul",
         // loss-triggered retransmissions, RTT, congestion state. The QUIC
         // socket exposes the same trace names as TCP; g_tcpConnected is shared
         // because exactly one transport runs per simulation.
-        Simulator::Schedule(Seconds(1.1), [senderQuicBasePath]() {
+        Simulator::Schedule(Seconds(1.6), [senderQuicBasePath]() {
             std::string rxPath = "/NodeList/" + std::to_string(g_receiverNodeId) +
                                  "/ApplicationList/*/Rx";
             Config::ConnectWithoutContext(rxPath, MakeCallback(&SinkRxPacket));
@@ -1902,7 +1969,7 @@ scenarioSetup(std::string flowDirection = "ul",
 
         if (logging)
         {
-            Simulator::Schedule(Seconds(1.1), [senderQuicBasePath]() {
+            Simulator::Schedule(Seconds(1.6), [senderQuicBasePath]() {
                 Config::ConnectWithoutContext(senderQuicBasePath + "CongestionWindow",
                                               MakeCallback(&CwndTracer));
 
@@ -1984,6 +2051,15 @@ scenarioSetup(std::string flowDirection = "ul",
         Ptr<NrUeNetDevice> ueNetDev = uavNode->GetDevice(0)->GetObject<NrUeNetDevice>();
         if (ueNetDev)
         {
+            // Uplink DRB RLC TX-buffer overflow drops. The RLC TX buffer is
+            // capped by --rlcTxBufferBytes; when it is full the PDCP PDU is
+            // discarded before transmission, which the transport sees as loss
+            // but which leaves no trace in the per-TB logs.
+            Config::ConnectWithoutContext(
+                "/NodeList/" + std::to_string(uavNodeId) +
+                    "/DeviceList/*/NrUeRrc/DataRadioBearerMap/*/NrRlc/TxDrop",
+                MakeCallback(&RlcTxDropLogger));
+
             Ptr<NrUePhy> uePhy = NrHelper::GetUePhy(ueNetDev, 0);
             Ptr<NrUePowerControl> powerCtrl = uePhy->GetUplinkPowerControl();
             // DL per-TB RX trace (RxPacketTraceUe) — DL mirror of
