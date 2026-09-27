@@ -406,26 +406,18 @@ NrRlHandoverObservationApp::ObserveSinkRx(Ptr<const Packet> packet, const Addres
 void
 NrRlHandoverObservationApp::ComputeTopNCells()
 {
-    // Collect (cellId, rsrp) pairs for all NON-serving cells, filtering out
-    // cells below the noise floor. The serving cell is EXCLUDED from the
-    // ranking: every action 1..N is then a genuine handover candidate — no
-    // blocked-same-cell actions, no Q-inflation from blocked handovers being
-    // credited with calm rewards — and the margin features
-    // (serving_rsrp - slot_rsrp[k]) become the unambiguous A3-style margin
-    // (positive = stay, negative = a better other cell exists).
+    // Rank all NON-serving cells above the noise floor: every action 1..N is a
+    // genuine handover candidate, and the margin features
+    // (serving_rsrp - slot_rsrp[k]) become the A3-style margin.
     struct Candidate
     {
         uint32_t cellId;
         double rsrp;
     };
 
-    // Re-sync the serving cell with the RRC state before ranking. The observation
-    // is assembled from the previous measurement cycle, so m_currentCellId can
-    // still name the cell the UE has just left: the freshly served cell would then
-    // stay in the ranking and be requestable, and the act app would block the
-    // request (the "blocked same-cell" actions). Only the identity is refreshed
-    // here; the serving RSRP/RSRQ are taken from the last measured values for the
-    // cell that is actually serving.
+    // Re-sync the serving cell with the live RRC state: the observation comes
+    // from the previous measurement cycle, so m_currentCellId may still name the
+    // cell the UE just left, which would make it requestable again.
     if (g_uavNrDevs.GetN() > 0)
     {
         auto ueDev = g_uavNrDevs.Get(0)->GetObject<NrUeNetDevice>();
@@ -497,10 +489,7 @@ NrRlHandoverObservationApp::BuildObservation()
     // Compute Top-N ranking before building observation
     ComputeTopNCells();
 
-    // Build flat Box with 32 dims. The shape MUST match the number of AddValue
-    // calls below: the CSV logger and the protobuf both read the declared
-    // shape, while the Python env reads the data length — a mismatch silently
-    // drops/desyncs the last column.
+    // Flat 32-dim Box; the declared shape must match the AddValue count below.
     //
     // Layout:
     //   [0-1]   serving_rsrp / serving_rsrq

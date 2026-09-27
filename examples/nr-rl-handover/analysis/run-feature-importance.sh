@@ -1,21 +1,9 @@
 #!/usr/bin/env bash
 # Regenerate the permutation feature-importance summaries for the three native
-# arms of the corrected (post-interface-fix, uniformly unsteered) RL evaluation:
-#
-#   clean TCP            PPO_2026-09-20_13-59-15   native clean regime
-#   interfered TCP       PPO_2026-09-21_12-07-15   native interference regime
-#   interfered QUIC      PPO_2026-09-21_12-07-15   native interference regime
-#
-# Writes feature-importance.csv, feature-importance-summary.md and
-# feature-importance-avg.png per cell.
-#
-# 2026-09-23: repointed from the retired steered-campaign cells
-# (results/agent-eval-ul-{no-if-tcp,if-tcp,no-if-quic,if-quic}-beta5) on the
-# pre-fix checkpoint PPO_2026-09-07_13-52-01, which no longer exist. The old
-# set held one checkpoint across four cells; the current set is native-per-cell
-# (each cell evaluated with the checkpoint trained for it), so the columns are
-# not a checkpoint-controlled comparison - that comparison is the zero-shot
-# transfer cells, which are not part of this table.
+# RL arms: clean TCP, interfered TCP and interfered QUIC.
+# Writes feature-importance.{csv,md} and feature-importance-avg.png per cell.
+# Each cell uses its own native checkpoint, so the columns are not a
+# checkpoint-controlled comparison.
 #
 # Usage: ./analysis/run-feature-importance.sh [SEEDS=20 REPEAT=3 LIMIT=0.5 ...]
 

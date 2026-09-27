@@ -78,7 +78,7 @@ Done. Data files in $OUT:
   hotspot $OUT/perf-rl-log-off.data
   hotspot $OUT/perf-rl-log-on.data
 Compare against the A3-mode baselines (profiling/profile-perf.sh, same workload):
-  logging off: 25.7 s | logging on: 27.5 s (2026-08-13, post stream-fix)
+  logging off: 25.7 s | logging on: 27.5 s
 The RL-mode - A3-mode delta is the synchronous python round trip per step
 (quantify with: python3 profiling/rl-step-latency.py)
 EOF

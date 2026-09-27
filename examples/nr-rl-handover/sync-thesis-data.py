@@ -7,9 +7,8 @@ _archive/ and the diagnostic probes.
 
 RL cells additionally get any derived feature-importance artifacts present in
 the cell dir, plus an action-distribution.csv aggregated from the per-seed
-rl_actions_full.csv (2026-09-23: the action-selectivity table needs the
-per-action counts split by outcome, and the raw per-seed file is not part of
-the reduced bundle, so the aggregate is derived here).
+rl_actions_full.csv (per-action counts split by outcome; the raw per-seed file
+is not part of the reduced bundle, so the aggregate is derived here).
 
 Several result trees can be merged into one bundle, in the order given, e.g.
     python3 sync-thesis-data.py --results results-unsteered results --allow-partial

@@ -437,17 +437,10 @@ DlRxPacketLogger(RxPacketTraceParams params)
     }
 }
 
-// UL SINR logged to ul_sinr_srs.csv. The trace fires from the UL DATA CQI
-// report (GenerateDataCqiReport -> pData chunk) — despite the "srs" name it
-// carries the full-band per-RB SINR spectrum, time-averaged by the
-// NrChunkProcessor (the same SINR the scheduler uses for UL CQI/MCS
-// selection). RBs not used by the UL transmission sit at the -40 dB sentinel,
-// so the average covers only the RBs with a real SINR (> 1e-12).
-//
-// NOTE: when gNBs share the exact same position (e.g., co-located sectors
-// without antenna offset), the channel model produces NaN Doppler values,
-// which causes all SINR entries to be NaN and get clamped to -40 dB.
-// Always apply a small (>= 1 m) antenna offset between co-located gNBs.
+// UL SINR log (ul_sinr_srs.csv): the UL CQI report's full-band per-RB SINR,
+// time-averaged; unused RBs hold the -40 dB sentinel and are excluded.
+// Co-located gNBs need a >= 1 m antenna offset, otherwise NaN Doppler clamps
+// every entry to -40 dB.
 void
 UlSrsSinrLogger(uint16_t cellId,
                 uint64_t imsi,
@@ -1015,20 +1008,12 @@ scenarioSetup(std::string flowDirection = "ul",
     CcBwpCreator::SimpleOperationBandConf bandConf(centralFrequency, bandwidth, 1);
     OperationBandInfo band = ccBwpCreator.CreateOperationBandContiguousCc(bandConf);
 
-    // --- Channel: 3GPP TR 38.901 UMa (Urban Macro), default LOS condition --- //
-    // CLI --channelUpdateMs: 0 disables the spatial-consistency / LOS-NLOS
-    // evolution (module default = frozen realization). At 20 ms the per-update
-    // displacement is 0.4 m at 20 m/s (~5 lambda at 3.5 GHz); at 50 ms it hits
-    // 1 m — the model's consistency limit — and the frozen staircase aliases
-    // the ~2 m-scale multipath fading into a two-level square-wave SINR.
-    // CLI --channelModel=tworay swaps in
-    // TwoRaySpectrumPropagationLossModel: it drops the 3GPP CHANNEL MATRIX
-    // machinery (GenSpectrumChannelMatrix + UpdatePeriod spatial consistency +
-    // MIMO spatial correlation — the dominant radio cost) but KEEPS the
-    // phased-array beamforming gain (array response x BF vector, NLOS penalty
-    // x1/19) and FTR small-scale fading + LOS corrections — what goes away is
-    // the matrix, not beamforming/fading. The physics differ (UMa condition
-    // model, FTR fading) — benchmark-only unless deliberately chosen.
+    // --- Channel: 3GPP TR 38.901 UMa-AV ---
+    // --channelUpdateMs: 0 freezes the spatial-consistency / LOS evolution; at
+    // 50 ms the per-update displacement reaches the ~1 m model limit and the
+    // staircase aliases the multipath fading.
+    // --channelModel=tworay drops the 3GPP channel matrix (the dominant radio
+    // cost) but keeps beamforming gain and FTR fading; benchmark-only.
     if (channelModel == "tworay")
     {
         // The two-ray model accepts the UMa-AV scenario (FTR fading aliases
@@ -1070,20 +1055,10 @@ scenarioSetup(std::string flowDirection = "ul",
         errorModelType = "ns3::NrLteMiErrorModel";
     g_nrHelper->SetDlErrorModel(errorModelType);
     g_nrHelper->SetUlErrorModel(errorModelType);
-    // gNB/UE beamforming method. All three share the same 4x2 gNB array and the
-    // same ThreeGppAntennaModel element:
-    //   quasiomni       - QuasiOmniDirectPathBeamforming: gNB quasi-omni, UE steered
-    //                     (the canonical default: gNB unsteered for the whole
-    //                     episode, so no arm depends on when it first hands over)
-    //   directpath      - DirectPathQuasiOmniBeamforming: gNB steered, UE quasi-omni.
-    //                     On the unpatched build the gNB vector only holds while the
-    //                     UE stays on the cell it attached to; the bf-handover-probe
-    //                     patch makes it effective on every cell (this was the
-    //                     pre-2026-09-18 default and produced the steered campaign)
-    //   directpath-both - DirectPathBeamforming: gNB steered, UE steered
-    // For the 1x1 UAV the UE-side vectors differ only in phase, so pairing
-    // directpath-both against quasiomni isolates the gNB vector and keeps the UE
-    // side identical.
+    // Beamforming: quasiomni = gNB quasi-omni / UE steered (canonical),
+    // directpath = gNB steered / UE quasi-omni, directpath-both = both steered.
+    // All share the 4x2 gNB array; for the 1x1 UAV the UE-side vectors differ
+    // only in phase.
     std::string beamformingType;
     if (beamformingMethod == "directpath")
         beamformingType = "ns3::DirectPathQuasiOmniBeamforming";
@@ -1652,14 +1627,9 @@ scenarioSetup(std::string flowDirection = "ul",
 
         g_interferingUeContainer.Create(addInterferingUes);
 
-        // Pin the interferer RNGs so their trajectories depend only on
-        // (seed, runId, UE index). Unpinned RNGs draw from the shared
-        // auto-assigned stream, so upstream consumption-order shifts
-        // (e.g. rlMode on/off between A3 baselines and RL evals) would silently
-        // move the interferers. Stream 110 = start positions (prefix-stable:
-        // adding interferers extends the draw sequence without moving UE 0..N-1);
-        // 111+2i / 112+2i = per-UE waypoint RNGs (each UE's plan independent of
-        // the total interferer count).
+        // Pin the interferer RNG streams so their trajectories depend only on
+        // (seed, runId, UE index), not on the upstream draw order. Stream 110 =
+        // start positions; 111+2i / 112+2i = per-UE waypoint RNGs.
         Ptr<UniformRandomVariable> interferingUeRng = CreateObject<UniformRandomVariable>();
         interferingUeRng->SetAttribute("Min", DoubleValue(0.0));
         interferingUeRng->SetAttribute("Max", DoubleValue(1.0));

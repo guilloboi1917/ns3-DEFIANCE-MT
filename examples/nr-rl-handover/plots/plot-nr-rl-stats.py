@@ -259,7 +259,7 @@ def main(argv=None):
         cwnd = cwnd[cwnd["cwnd"] <= 0xFFFFFFFF]
         cwnd = cwnd.drop_duplicates(subset="time", keep="last").sort_values("time")
 
-    # Real window ceiling for the flow (meta.yaml since 2026-09-08).
+    # Real window ceiling for the flow (from meta.yaml).
     sndbuf_bytes = 1 << 20
     _meta = os.path.join(data_dir, "meta.yaml")
     if os.path.exists(_meta):

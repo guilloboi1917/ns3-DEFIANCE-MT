@@ -114,11 +114,8 @@ class NrRlHandoverObservationApp : public ObservationApplication
     double m_velocityY{0.0}; ///< Current velocity Y component (m/s)
     double m_velocityZ{0.0}; ///< Current velocity Z component (m/s)
 
-    /// One observation-window snapshot used by the 1 s time-delta features.
-    /// RSRP is stored per PHYSICAL cell (cellId-keyed) so time deltas compare
-    /// each cell against its own 1 s-old value — rank re-orderings do not alias
-    /// the trend (d_slot_rsrp[k] stays the trend of the same physical cell even
-    /// as the ranking shifts). Memory: 5 snapshots x numBs doubles.
+    /// Observation-window snapshot for the 1 s time-delta features. RSRP is
+    /// keyed by physical cell so a rank re-ordering does not alias the trend.
     struct ObsSnapshot
     {
         double servingRsrq{-20.0};   ///< Serving RSRQ (dB)

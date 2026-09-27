@@ -125,9 +125,7 @@ NrRlHandoverRewardApp::GetTypeId()
             .AddAttribute("PingPongWindowMs",
                           "Maximum age of an A->B->A pattern for it to count as a "
                           "ping-pong: the two handovers back to the same cell must be at "
-                          "most this far apart. 0 disables the age limit, in which case "
-                          "any A->B->A sequence is flagged regardless of elapsed time "
-                          "(the behaviour before 2026-09-20).",
+                          "most this far apart. 0 disables the age limit.",
                           UintegerValue(0),
                           MakeUintegerAccessor(&NrRlHandoverRewardApp::m_pingPongWindowMs),
                           MakeUintegerChecker<uint32_t>(0, 600000))
@@ -238,10 +236,8 @@ NrRlHandoverRewardApp::ObserveHandover(const uint64_t imsi,
     // Set hangover counter (will decay each step in SendReward)
     m_handoverHangoverSteps = m_handoverHangoverLength;
 
-    // Detect ping-pong: A->B->A pattern
-    // handoverHistory[0] = oldest, [2] = most recent; the times are shifted with
-    // the history so the ping-pong flag can be bounded in age.
-    // Shift history left by one, append new cellId
+    // Detect ping-pong: A->B->A pattern (times shifted with the history so the
+    // flag can be bounded in age); shift history left, append new cellId.
     m_handoverHistory[0] = m_handoverHistory[1];
     m_handoverHistory[1] = m_handoverHistory[2];
     m_handoverHistory[2] = cellId;
@@ -354,9 +350,8 @@ NrRlHandoverRewardApp::SendReward()
     }
 
     // --- 6. Ping-pong detection: A->B->A pattern ---
-    // handoverHistory[0] and [2] being equal means we bounced back. With a
-    // non-zero window the pair must also be recent: two handovers back to the
-    // same cell minutes apart are a legitimate return, not a ping-pong.
+    // Equal [0] and [2] means a bounce-back; with a window set the pair must
+    // also be recent.
     bool pingPong = false;
     if (m_handoverHistory[0] > 0 && m_handoverHistory[2] > 0 &&
         m_handoverHistory[0] == m_handoverHistory[2] &&
@@ -381,12 +376,9 @@ NrRlHandoverRewardApp::SendReward()
     double R_H = 1.0 / (1.0 + effectiveBeta * hoWeight);
 
     // --- 8. Combined reward ---
-    // additive: R = alpha*R_G + (1-alpha)*R_H — a constant (1-alpha)
-    //   baseline on calm steps (policy-invariant in fixed-length episodes) and a
-    //   handover tax capped at (1-alpha) per hangover step.
-    // multiplicative:     R = R_G * R_H — no baseline; the handover tax scales
-    //   with the goodput being sacrificed (up to the full R_G per hangover step);
-    //   the dead-link floor is R_G(0) = 1/(1+beta_G).
+    // additive:     R = alpha*R_G + (1-alpha)*R_H, constant baseline on calm steps.
+    // multiplicative: R = R_G * R_H, the handover tax scales with the goodput
+    //   sacrificed. Dead-link floor: R_G(0) = 1/(1+beta_G).
     double reward = (m_rewardComposition == "multiplicative")
                         ? R_G * R_H
                         : m_alphaGoodput * R_G + (1.0 - m_alphaGoodput) * R_H;

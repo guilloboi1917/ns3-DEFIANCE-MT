@@ -30,12 +30,8 @@ std::string g_interfererMobility = "static";
 bool g_logging = false;
 bool rlMode = false;
 bool idealRrc = true; // RRC protocol model: true = ideal (5G-LENA default), false = real
-// Canonical environment is uniformly unsteered: gNB quasi-omni for the whole
-// episode. The pre-2026-09-18 default was "directpath", whose gNB steering is
-// applied only while the UAV remains on the cell it attached to at initial
-// attachment (5G-LENA limitation), so it decayed to quasi-omni after the first
-// handover; that default produced the 2026-09 steered campaign dataset. Pass
-// --beamformingMethod=directpath explicitly to reproduce it.
+// Canonical default: gNB quasi-omni for the whole episode, so no arm depends on
+// when its first handover happens. See nr-rl-handover-scenario-setup.cc.
 std::string beamformingMethod = "quasiomni";
 std::string handoverAlgorithm = "a3";
 double a3HysteresisDb = 3.0;   // A3 hysteresis (dB)
@@ -335,10 +331,8 @@ main(int argc, char* argv[])
 
     if (g_transportProtocol == "quic")
     {
-        // The 2026-09-02 "QUIC is not usable" verdict was a trigger artifact:
-        // at a small RLC TX buffer the startup burst overruns the buffer and
-        // the sender wedges ~1.8 s in (BUGS-ISSUES #31 correction, #34). At
-        // 512 kB and above the ENTEL-WNG fork runs the full 50 s episode.
+        // A small RLC TX buffer stalls the QUIC startup burst ~1.8 s in;
+        // 512 kB and above run the full episode.
         if (rlcTxBufferBytes != 0 && rlcTxBufferBytes < 524288)
         {
             std::cout << "WARNING: transportProtocol=quic with "

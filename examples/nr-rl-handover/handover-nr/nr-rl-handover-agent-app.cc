@@ -90,8 +90,6 @@ NrRlHandoverAgentApp::GetObservationSpace()
     // Dict wrapping 32-dim Box (key "obs") to match Send() data format
     auto dictSpace = CreateObject<OpenGymDictSpace>();
 
-    //   TODO: Check explained variance when adding gNB features, serving relative position,
-    //   angle between relative uav position and bearing
     //   [0-1] serving_rsrp/rsrq, [2-4] slot_rsrp[0..2], [5-7] rsrp_delta[0..2],
     //   [8] dl_sinr, [9] time_since_ho, [10] norm_goodput, [11] ho_count_10s,
     //   [12-14] ul_sinr/ul_rb_util/ul_sched_ue,
