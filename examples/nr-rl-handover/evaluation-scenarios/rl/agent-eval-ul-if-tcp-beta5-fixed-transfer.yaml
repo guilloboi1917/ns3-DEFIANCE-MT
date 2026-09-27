@@ -1,0 +1,49 @@
+# Evaluation of the CORRECTED clean-regime arm (run PPO_2026-09-20_13-59-15, best
+# checkpoint = training_iteration 55). New file; earlier eval configs untouched.
+# Recipe: beta_H 5.0, trained with no interferers, uniformly unsteered, corrected
+# serving-cell interface, rlPingPongWindowMs 5000, rlHandoverHangoverLength 2.
+# All three reward keys are inherited from the checkpoint training meta.yaml.
+# Companion of agent-eval-ul-no-if-tcp-beta5-fixed.yaml (clean TCP, already run).
+#
+# This cell: zero-shot transfer of the clean-trained policy into the interfered
+# regime (4 aerial interferers), TCP. A3 comparator: the unsteered rerun cell
+# nr-rl-handover-a3-baseline-30mhz-tcp-ul/tcp-ul-if.
+#
+# RENAMED 2026-09-22: gained the -transfer suffix (was ...-beta5-fixed) so the
+# clean-trained arm's interfered cell cannot collide with the in-regime arm's
+# native cell (agent-eval-ul-if-tcp-beta5-fixed-native, run PPO_2026-09-21_12-07-15).
+# The suffix marks the regime transfer (trained with no interferers, evaluated
+# with interferers); it is not a transport distinction.
+
+evaluation:
+  name: agent-eval-ul-if-tcp-beta5-fixed-transfer
+  mode: rl
+  checkpoint: /home/nisaak/masterthesis-ns3/ns-3-dev/contrib/defiance/examples/nr-rl-handover/checkpoints/PPO_2026-09-20_13-59-15/  # auto-appends best_checkpoint
+  n_seeds: 20
+  sim_time: 50
+  common:
+    tcpSndBufBytes: 1048576
+    rlcTxBufferBytes: 2097152
+    tcpMinRtoMs: 200
+    tcpDelAckTimeoutMs: 40
+    tcpDelAckCount: 2
+    transportProtocol: tcp
+    flowDirection: ul
+    uavMobility: random-waypoint
+    startHeight: 50
+    endHeight: 200
+    topology: triangle
+    addInterferingUes: 4
+    aerialUeRatio: 1.0
+    interfererMobility: static
+    bandwidthMhz: 30
+    numerology: 1
+    errorModel: eesm-ir-t1
+    channelUpdateMs: 20
+    trafficRateMbps: 35
+    rlRewardRefMbps: 35
+  scenarios:
+    - tag: triangle-ul-if-tcp-fixed-transfer
+      topology: triangle
+      addInterferingUes: 4
+      aerialUeRatio: 1.0

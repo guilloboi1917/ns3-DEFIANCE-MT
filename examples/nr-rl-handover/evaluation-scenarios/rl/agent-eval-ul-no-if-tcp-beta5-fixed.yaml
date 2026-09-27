@@ -1,0 +1,53 @@
+# REGIME: canonical (adopted 2026-09-11; RLC TX 2 MiB, TCP SndBuf 1 MiB,
+# MinRto 200 ms, DelAck 40 ms x2).
+# agent-eval-ul-no-if-tcp-beta5-fixed.yaml -- evaluation of the CORRECTED
+# beta-5.0 clean-regime arm (run PPO_2026-09-20_13-59-15, best checkpoint =
+# training_iteration 55). New file; the earlier eval configs are untouched.
+#
+# This arm differs from agent-eval-ul-no-if-tcp-beta5 (pre-fix recipe) in:
+#   - corrected serving-cell interface (obs app excludes the live RRC serving
+#     cell from the ranked candidates; no more blocked same-cell requests),
+#   - rlHandoverHangoverLength 2 (0.8 s post-handover tax window),
+#   - rlPingPongWindowMs 5000 (A->B->A counts as ping-pong only within 5 s),
+#   - trained under the uniformly unsteered default (quasiomni); the pre-fix
+#     checkpoints were trained under the old directpath default.
+# All three reward keys are inherited from the checkpoint's training meta.yaml
+# via REWARD_ENV_KEYS, so they are not repeated in `common:` here.
+#
+# Run:
+#   python3 contrib/defiance/examples/nr-rl-handover/run-evaluations.py \
+#       contrib/defiance/examples/nr-rl-handover/evaluation-scenarios/rl/agent-eval-ul-no-if-tcp-beta5-fixed.yaml \
+#       --jobs 6 --analyze
+
+evaluation:
+  name: agent-eval-ul-no-if-tcp-beta5-fixed
+  mode: rl
+  checkpoint: /home/nisaak/masterthesis-ns3/ns-3-dev/contrib/defiance/examples/nr-rl-handover/checkpoints/PPO_2026-09-20_13-59-15/  # corrected beta-5.0 clean run; auto-appends best_checkpoint
+  n_seeds: 20
+  sim_time: 50                 # must match the training simDuration
+  common:
+    tcpSndBufBytes: 1048576  # canonical: SndBuf >= 2x BDP
+    rlcTxBufferBytes: 2097152  # canonical: RLC TX cap >= SndBuf + one BDP
+    tcpMinRtoMs: 200  # canonical: Linux TCP_RTO_MIN
+    tcpDelAckTimeoutMs: 40  # canonical: Linux TCP_DELACK_MIN (breaks the delayed-ACK/RTO race)
+    tcpDelAckCount: 2
+    transportProtocol: tcp
+    flowDirection: ul           # 3GPP UAV primary direction (UL)
+    uavMobility: random-waypoint
+    startHeight: 50
+    endHeight: 200
+    topology: triangle
+    addInterferingUes: 0
+    aerialUeRatio: 0.0
+    interfererMobility: static  # "waypoint" = legacy random flight
+    bandwidthMhz: 30
+    numerology: 1
+    errorModel: eesm-ir-t1
+    channelUpdateMs: 20         # channel spatial-consistency update period (ms)
+    trafficRateMbps: 35         # TCP cap == UDP offered load (same headroom)
+    rlRewardRefMbps: 35         # must match the training config
+  scenarios:
+    - tag: triangle-ul-no-if-tcp-fixed
+      topology: triangle
+      addInterferingUes: 0
+      aerialUeRatio: 0.0

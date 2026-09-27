@@ -1,0 +1,38 @@
+# Evaluation of the CORRECTED clean-regime arm (run PPO_2026-09-20_13-59-15, best
+# checkpoint = training_iteration 55). New file; earlier eval configs untouched.
+# Recipe: beta_H 5.0, trained with no interferers, uniformly unsteered, corrected
+# serving-cell interface, rlPingPongWindowMs 5000, rlHandoverHangoverLength 2.
+# All three reward keys are inherited from the checkpoint training meta.yaml.
+# Companion of agent-eval-ul-no-if-tcp-beta5-fixed.yaml (clean TCP, already run).
+#
+# This cell: interfered regime (4 aerial interferers) over a QUIC data plane.
+# A3 comparator: nr-rl-handover-a3-baseline-30mhz-quic-ul/quic-ul-if.
+
+evaluation:
+  name: agent-eval-ul-if-quic-beta5-fixed
+  mode: rl
+  checkpoint: /home/nisaak/masterthesis-ns3/ns-3-dev/contrib/defiance/examples/nr-rl-handover/checkpoints/PPO_2026-09-20_13-59-15/
+  n_seeds: 20
+  sim_time: 50
+  common:
+    rlcTxBufferBytes: 2097152
+    transportProtocol: quic
+    flowDirection: ul
+    uavMobility: random-waypoint
+    startHeight: 50
+    endHeight: 200
+    topology: triangle
+    addInterferingUes: 4
+    aerialUeRatio: 1.0
+    interfererMobility: static
+    bandwidthMhz: 30
+    numerology: 1
+    errorModel: eesm-ir-t1
+    channelUpdateMs: 20
+    trafficRateMbps: 35
+    rlRewardRefMbps: 35
+  scenarios:
+    - tag: triangle-ul-if-quic-fixed
+      topology: triangle
+      addInterferingUes: 4
+      aerialUeRatio: 1.0

@@ -1,0 +1,51 @@
+# udp-rlc-am.yaml -- UDP over RLC AM (2026-09-22).
+#
+# WHY: the B2 mechanism reading is that handover churn is absorbed below the
+# application by a layered reliability chain (HARQ -> RLC AM -> transport ARQ).
+# The transport comparison runs UDP over RLC UM (scenario policy), so the RLC-ARQ
+# term of that chain is only observed indirectly, through TCP/QUIC. This block
+# adds the missing UDP + RLC AM arm and turns the claim into a measured
+# decomposition at one A3 config:
+#   UDP + UM : no ARQ above HARQ   -> raw loss
+#   UDP + AM : RLC ARQ only        -> this cell
+#   TCP + AM : RLC ARQ + TCP ARQ   -> transport-comparison bw30-n1_tcp (stored)
+#
+# PAIRED OFF ARM: results-unsteered/transport-comparison/bw30-n1_udp (UDP, RLC
+# UM, identical common block, same build a75668ae, 20 seeds). Nothing needs
+# re-running; the ON arm is the only new cell.
+#
+# EXPECTATION: RLC ARQ trades end-to-end loss for latency (retransmission adds
+# head-of-line delay). Report both; the interesting number is how much of the
+# ~15.7 % UDP loss the RLC layer alone recovers.
+#
+# A3 only. No RL claim: the checkpoints were trained on RLC-AM inputs, so a
+# different RLC mode puts them off-domain. Frame as a B2 mechanism ablation, not
+# as a third transport contender.
+#
+# Run (from the example dir):
+#   python3 run-evaluations.py evaluation-scenarios/baseline/udp-rlc-am.yaml \
+#       --jobs 10 --analyze
+# Output: results/udp-rlc-am/ (merged into EvaluationData with the results tree).
+
+evaluation:
+  name: udp-rlc-am
+  mode: a3
+  n_seeds: 20
+  sim_time: 50
+  common:
+    tcpSndBufBytes: 1048576  # canonical: SndBuf >= 2x BDP
+    rlcTxBufferBytes: 2097152  # canonical: RLC TX cap >= SndBuf + one BDP
+    tcpMinRtoMs: 200  # canonical: Linux TCP_RTO_MIN
+    tcpDelAckTimeoutMs: 40  # canonical: Linux TCP_DELACK_MIN (breaks the delayed-ACK/RTO race)
+    tcpDelAckCount: 2
+    flowDirection: ul
+    startHeight: 50
+    endHeight: 200
+    ueSpeed: 20
+    addInterferingUes: 0
+    aerialUeRatio: 0
+    topology: triangle
+    uavMobility: random-waypoint
+    tcpVariant: TcpBbr
+  scenarios:
+    - {tag: bw30-n1_udp-am, transportProtocol: udp, bandwidthMhz: 30, numerology: 1, trafficRateMbps: 45, rlcMode: am}

@@ -1,0 +1,45 @@
+# Evaluation of the CORRECTED in-regime arm (run PPO_2026-09-21_12-07-15, best
+# checkpoint = checkpoint_000052). New file; earlier eval configs untouched.
+# Recipe: identical to the clean-trained arm (train-ppo-ul-no-if-tcp-beta5-fixed)
+# - beta_H 5.0, uniformly unsteered, corrected serving-cell interface,
+# rlPingPongWindowMs 5000, rlHandoverHangoverLength 2 - except that training ran
+# with four aerial interferers (addInterferingUes 4). All three reward keys are
+# inherited from the checkpoint training meta.yaml.
+# Counterpart of agent-eval-ul-if-tcp-beta5-fixed-transfer.yaml.
+#
+# This cell: native evaluation of the in-regime-trained policy in the regime it
+# was trained in (4 aerial interferers), TCP. A3 comparator: the unsteered rerun
+# cell nr-rl-handover-a3-baseline-30mhz-tcp-ul/tcp-ul-if.
+
+evaluation:
+  name: agent-eval-ul-if-tcp-beta5-fixed-native
+  mode: rl
+  checkpoint: /home/nisaak/masterthesis-ns3/ns-3-dev/contrib/defiance/examples/nr-rl-handover/checkpoints/PPO_2026-09-21_12-07-15/  # auto-appends best_checkpoint
+  n_seeds: 20
+  sim_time: 50
+  common:
+    tcpSndBufBytes: 1048576
+    rlcTxBufferBytes: 2097152
+    tcpMinRtoMs: 200
+    tcpDelAckTimeoutMs: 40
+    tcpDelAckCount: 2
+    transportProtocol: tcp
+    flowDirection: ul
+    uavMobility: random-waypoint
+    startHeight: 50
+    endHeight: 200
+    topology: triangle
+    addInterferingUes: 4
+    aerialUeRatio: 1.0
+    interfererMobility: static
+    bandwidthMhz: 30
+    numerology: 1
+    errorModel: eesm-ir-t1
+    channelUpdateMs: 20
+    trafficRateMbps: 35
+    rlRewardRefMbps: 35
+  scenarios:
+    - tag: triangle-ul-if-tcp-fixed-native
+      topology: triangle
+      addInterferingUes: 4
+      aerialUeRatio: 1.0

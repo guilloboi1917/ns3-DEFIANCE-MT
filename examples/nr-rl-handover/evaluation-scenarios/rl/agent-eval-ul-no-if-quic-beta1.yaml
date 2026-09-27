@@ -1,0 +1,50 @@
+# REGIME: canonical (adopted 2026-09-11; RLC TX 2 MiB, TCP SndBuf 1 MiB,
+# MinRto 200 ms, DelAck 40 ms x2). Pre-canonical versions live in
+# evaluation-scenarios/_archive/.
+# agent-eval-ul-no-if-quic-beta1.yaml -- CANONICAL REGIME, QUIC transport,
+# beta_H 1.0. Completes the transport x reward x regime matrix (added
+# 2026-09-18): until now only the beta-5.0 checkpoint had QUIC legs, so the
+# transport comparison existed at one reward setting only. This cell is the
+# no-if / QUIC quadrant of the beta-1.0 block, read next to
+# agent-eval-ul-no-if-tcp.yaml (same checkpoint, TCP) and against the A3 QUIC
+# comparator nr-rl-handover-a3-baseline-30mhz-quic-ul.yaml.
+#
+# Reward/obs settings are forwarded from the checkpoint's training meta.yaml
+# (rlBetaHandover 1.0, stepTime 400, obsStackFrames 2, rlRewardRefMbps 35),
+# so nothing reward-related needs to be set here. The agent observes radio
+# state only (RSRP/SINR per cell) and rewards sink goodput, so the transport
+# is a pure data-plane swap.
+#
+# Run:
+#   python3 contrib/defiance/examples/nr-rl-handover/run-evaluations.py \
+#       contrib/defiance/examples/nr-rl-handover/evaluation-scenarios/rl/agent-eval-ul-no-if-quic-beta1.yaml \
+#       --jobs 4 --analyze
+
+evaluation:
+  name: agent-eval-ul-no-if-quic-beta1
+  mode: rl
+  checkpoint: /home/nisaak/masterthesis-ns3/ns-3-dev/contrib/defiance/examples/nr-rl-handover/checkpoints/PPO_2026-09-02_00-07-41/  # no-if TCP, beta_H 1.0, 120 iters; auto-appends best_checkpoint
+  n_seeds: 20
+  sim_time: 50                 # must match the training simDuration
+  common:
+    rlcTxBufferBytes: 2097152  # canonical radio buffer; >= QUIC startup burst
+    transportProtocol: quic
+    flowDirection: ul           # 3GPP UAV primary direction (UL)
+    uavMobility: random-waypoint
+    startHeight: 50
+    endHeight: 200
+    topology: triangle
+    addInterferingUes: 0
+    aerialUeRatio: 0.0
+    interfererMobility: static  # "waypoint" = legacy random flight
+    bandwidthMhz: 30
+    numerology: 1
+    errorModel: eesm-ir-t1
+    channelUpdateMs: 20         # channel spatial-consistency update period (ms)
+    trafficRateMbps: 35         # same offered load as the TCP leg
+    rlRewardRefMbps: 35         # must match the training config
+  scenarios:
+    - tag: triangle-ul-no-if-quic-beta1
+      topology: triangle
+      addInterferingUes: 0
+      aerialUeRatio: 0.0

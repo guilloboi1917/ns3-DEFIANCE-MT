@@ -1,0 +1,99 @@
+# a3-bf-onoff.yaml -- A3 beamforming ON/OFF comparison (re-prepared 2026-09-22).
+#
+# WHY: in the uniformly unsteered dataset (results-unsteered/) every gNB runs
+# quasi-omni, so no stored cell shows the effect of actually steering the array.
+# This block adds the steered arm, A3 only, so the ON/OFF difference can be
+# reported. The earlier 2026-09-18 ablation is treated as stale and is not used.
+#
+# REQUIRES THE PATCHED BUILD: contrib/nr branch `bf-handover-probe`
+# (commit 54caa12a, base a75668ae). Without the patch the steering vector is not
+# applied on any cell the UE did not attach to at initial attachment, so the ON
+# tags are inert after the first handover and the block measures nothing. Check
+# out the branch and rebuild before running:
+#   git -C contrib/nr switch bf-handover-probe && ./ns3 build
+# Any result from this block must be labelled with that branch/commit, never
+# with a75668ae (which the thesis cites for the campaign revision).
+#
+# DESIGN: in-build paired, two arms one flag apart, same seeds and cells:
+#   ON  = directpath  (DirectPathQuasiOmniBeamforming: gNB steered, UE quasi-omni)
+#   OFF = quasiomni   (QuasiOmniDirectPathBeamforming: gNB quasi-omni, UE steered)
+# Both cells are included because the patch also affects cells that serve several
+# UEs, so there is no beamforming-vs-interference confound. Do NOT use
+# results-unsteered/ as the OFF arm: the patch changes the per-seed realisation
+# even with quasiomni (only the means are close).
+#
+# INTERPRETATION RULES:
+#  - A3 only. No RL claim: the trained checkpoints see RSRP/SINR inputs that a
+#    steered gNB changes, so they are off-domain unless retrained.
+#  - Radio-facing metrics are the expressive ones (DL/UL SINR, TBLER, MCS,
+#    serving RSRP, HARQ NACK). Goodput mixes capacity with the transport's
+#    reaction and is not monotone: a probe showed +2.9 dB uplink SINR with 11x
+#    the TCP retransmissions and slightly lower goodput. Frame as "beamforming
+#    changes the radio and the transport's response", not as "better".
+#  - Do not compare these radio metrics across transports (evaluation-regime-scope
+#    section 11 still applies).
+#
+# Run (after checkout + rebuild, from the example dir):
+#   python3 run-evaluations.py evaluation-scenarios/baseline/a3-bf-onoff.yaml \
+#       --jobs 10 --analyze
+# Output: results/a3-bf-onoff/ (narrative block B5 in sync-thesis-data.py).
+
+evaluation:
+  name: a3-bf-onoff
+  mode: a3
+  n_seeds: 20
+  sim_time: 50
+
+  common:
+    tcpSndBufBytes: 1048576  # canonical: SndBuf >= 2x BDP
+    rlcTxBufferBytes: 2097152  # canonical: RLC TX cap >= SndBuf + one BDP
+    tcpMinRtoMs: 200  # canonical: Linux TCP_RTO_MIN
+    tcpDelAckTimeoutMs: 40  # canonical: Linux TCP_DELACK_MIN (breaks the delayed-ACK/RTO race)
+    tcpDelAckCount: 2
+    topology: triangle
+    intersiteDistance: 500
+    uavMobility: random-waypoint
+    ueSpeed: 20
+    startHeight: 50
+    endHeight: 200
+    bandwidthMhz: 30
+    numerology: 1
+    errorModel: eesm-ir-t1
+    channelUpdateMs: 20
+    trafficRateMbps: 35         # near-capacity load (measured 30 MHz n1 UL ceiling ~33 Mbps)
+    rlRewardRefMbps: 35       # informational (A3 runs no RL apps); matches the agent evals
+
+  scenarios:
+    # gNB steered at the UAV (requires the patch)
+    - tag: "tcp-ul-no-if-bfon"
+      algorithm: a3
+      flowDirection: ul
+      addInterferingUes: 0
+      aerialUeRatio: 0.0
+      transportProtocol: tcp
+      beamformingMethod: directpath
+
+    - tag: "tcp-ul-if-bfon"
+      algorithm: a3
+      flowDirection: ul
+      addInterferingUes: 4
+      aerialUeRatio: 1.0
+      transportProtocol: tcp
+      beamformingMethod: directpath
+
+    # gNB quasi-omni (the unsteered dataset's method; patch-invariant)
+    - tag: "tcp-ul-no-if-bfoff"
+      algorithm: a3
+      flowDirection: ul
+      addInterferingUes: 0
+      aerialUeRatio: 0.0
+      transportProtocol: tcp
+      beamformingMethod: quasiomni
+
+    - tag: "tcp-ul-if-bfoff"
+      algorithm: a3
+      flowDirection: ul
+      addInterferingUes: 4
+      aerialUeRatio: 1.0
+      transportProtocol: tcp
+      beamformingMethod: quasiomni
