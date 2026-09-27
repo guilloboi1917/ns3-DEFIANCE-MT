@@ -419,6 +419,34 @@ NrRlHandoverObservationApp::ComputeTopNCells()
         double rsrp;
     };
 
+    // Re-sync the serving cell with the RRC state before ranking. The observation
+    // is assembled from the previous measurement cycle, so m_currentCellId can
+    // still name the cell the UE has just left: the freshly served cell would then
+    // stay in the ranking and be requestable, and the act app would block the
+    // request (the "blocked same-cell" actions). Only the identity is refreshed
+    // here; the serving RSRP/RSRQ are taken from the last measured values for the
+    // cell that is actually serving.
+    if (g_uavNrDevs.GetN() > 0)
+    {
+        auto ueDev = g_uavNrDevs.Get(0)->GetObject<NrUeNetDevice>();
+        if (ueDev && ueDev->GetRrc())
+        {
+            uint32_t liveCellId = ueDev->GetRrc()->GetCellId();
+            if (liveCellId > 0 && liveCellId <= m_numBs && liveCellId != m_currentCellId)
+            {
+                m_currentCellId = liveCellId;
+                if (!std::isnan(m_rsrpValues[liveCellId - 1]))
+                {
+                    m_servingRsrp = m_rsrpValues[liveCellId - 1];
+                }
+                if (!std::isnan(m_rsrqValues[liveCellId - 1]))
+                {
+                    m_servingRsrq = m_rsrqValues[liveCellId - 1];
+                }
+            }
+        }
+    }
+
     std::vector<Candidate> candidates;
     candidates.reserve(m_numBs);
 
