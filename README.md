@@ -1,73 +1,36 @@
-# DEFIANCE project: How to Simulate MARL Deployments in Realistic Network Scenarios
+# DEFIANCE - RL/ML research framework for ns-3
 
-Our project mainly builds upon the `ns3` network simulator, `ns3-ai` for ML integration.
+DEFIANCE provides a framework for reinforcement-learning research in ns-3, built
+on [ns3-ai](https://github.com/DEFIANCE-project/ns3-ai) for the shared-memory
+Python interface. Upstream documentation: <https://DEFIANCE-project.github.io>.
 
-We provide a framework for ML and RL research using ns3.
-You can find our [design documentation and user documentation here](https://DEFIANCE-project.github.io).
+This fork hosts the thesis example
+[`examples/nr-rl-handover`](examples/nr-rl-handover/README.md): an aerial-UE
+5G-LENA handover scenario with RL agents (PPO via RLlib) evaluated against an A3
+baseline. See that README for the pinned forks, build steps and campaign usage.
 
-For a practical example of how our framework is used, see [this Medium article](https://medium.com/@oliver.zimmermann/reinforcement-learning-in-ns3-part-1-698b9c30c0cd). The blog is divided into two parts and demonstrates building a balancing inverted pendulum in a network scenario using our framework.
+## Install
 
-## Setup the development environment
+1. Clone ns-3 and set `NS3_HOME` to it.
+2. Clone ns3-ai and this repo into `contrib/` as `contrib/ai` and
+   `contrib/defiance`.
+3. `poetry -C contrib/defiance install --without local`, activate the venv, then
+   `poetry -C contrib/defiance install --with local`.
+4. `./ns3 configure --enable-python --enable-examples --enable-tests`
+5. `./ns3 build ai && ./ns3 build`
 
-### Installation with setup helper
+Then start a scenario with `run-agent train -n <scenario>` (see
+`run-agent --help`). Alternatively use the prebuilt container
+`ghcr.io/defiance-project/bake-defiance:full-latest`, or the local `Dockerfile`
+(`--build-arg BUILD_NS3=False` skips the ns-3 build).
 
-See <https://github.com/DEFIANCE-project/bake-defiance> for easy instructions.
-Despite the name, it doesn't use bake anymore.
+## Development tools
 
-### Docker
-
-If you just want a docker container ready to build ns3-defiance, pull <ghcr.io/defiance-project/bake-defiance:full-latest>.
-
-For development, we supply a `Dockerfile` here, in which you can build your custom changes to ns3-defiance. It builds upon the aforementioned docker image.
-Then, you can build a docker image containing your local changes with a simple `docker build .`.
-The ns3 root directory is at `$NS3_HOME`; the default working directory.
-By default, ns3 and ns3-defiance are built directly. To skip the build, add `--build-arg BUILD_NS3=False`.
-
-### Manual installation
-
-Requirements: Depending on your use-case, different dependencies are needed. For a complete list of all possible
-development dependencies, refer
-to [our devcontainer Dockerfile](https://github.com/DEFIANCE-project/bake-defiance/blob/main/.devcontainer/Dockerfile#L9)
-
-1. Clone ns3 `git clone https://gitlab.com/nsnam/ns-3-dev.git -b ns-3.XX`
-1. Some of our code needs that the environment variable `NS3_HOME` is set. Set it with `export NS3_HOME=$(pwd)/ns-3.XX`
-1. Clone ns3-ai and ns3-defiance into `ns3/contrib`:
-
-    ```shell-c
-   cd ns-3-dev/
-   git clone https://github.com/DEFIANCE-project/ns3-ai contrib/ai
-   git clone https://github.com/DEFIANCE-project/ns3-defiance contrib/defiance
-    ```
-
-1. Install the python dependency of defiance with poetry: `poetry -C contrib/defiance install --without local` and activate the venv.
-1. Make sure, you have all other dependencies. Running `./ns3 configure --enable-python --enable-examples --enable-tests`
-   should succeed.
-1. Then, compile ns3-ai to generate the message types with protobuf: `./ns3 build ai`
-1. Install the python packages of ns3-ai with `poetry -C contrib/defiance install --with local`
-1. Compile everything with `./ns3 build`
-1. You are now able to start the training of our example scenario, such as `defiance-balance2`
-   with `run-agent train -n defiance-handover`. See `run-agent --help` for more info.
-
-### Development tools
-
-This repo comes with additional developer tools, which may be installed with `poetry install --with dev`.
-
-- We format and lint our python code with `ruff`. Simply run `ruff check` to lint and `ruff format` to format.
-- We enforce type-checking on our code with `mypy`. Simply run it!
-- Optional jupyter notebook support can be installed with `poetry`. Simply run `poetry install --with ipynb`!
-
-In order to test ns3, it needs to be configured correctly. Refer to <https://github.com/DEFIANCE-project/bake-defiance>
-for a complete command suggestion.
-
-The ns3 testsuites in the `test` directory can be run with `./test.py -s <test-suite>`,
-e.g. `./test.py -s defiance-agent-application` for the `defiance-agent-application` testsuite
-in `/test/agent-application-test.cc`. For
-further information refer to <https://www.nsnam.org/docs/manual/html/how-to-write-tests.html>.
-
-The special ns3-ai tests need to be executed with `pytest contrib/defiance`.
+- `ruff check` / `ruff format` for Python lint and formatting.
+- `mypy` for type checking (install extras with `poetry install --with dev`).
+- ns-3 testsuites: `./test.py -s <suite>`; ns3-ai tests: `pytest contrib/defiance`.
 
 ## Frequent problems
 
-When you run a ns3 simulation which uses ns3-ai, a segmentation fault occurs. A corresponding python agent is required
-to run the simulation. For this, you can use the `run-agent` cli program, i.e. `run-agent train` for training with ray
-and `run-agent debug` for debugging and `run-agent random` for a random agent. Check out `run-agent -h` for help.
+A simulation that uses ns3-ai segfaults when no Python agent is attached. Run it
+through `run-agent train|debug|random` instead of a bare `ns3 run`.
