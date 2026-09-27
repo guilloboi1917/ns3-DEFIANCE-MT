@@ -7,17 +7,19 @@ knowledge base.
 
 ## Pinned repositories
 
-| path | origin | branch / commit |
+| path | origin | pin |
 |---|---|---|
 | `ns-3-dev/` | `git@gitlab.com:nisaak/ns-3-dev-mathesis.git` | tag `thesis-submission` |
-| `contrib/nr` | `git@gitlab.com:nisaak/nr-mt.git` | `nr-v5.1-local` (`a75668ae`) |
-| `contrib/ai` | `https://github.com/guilloboi1917/ns3-ai-MT` | fork head |
-| `contrib/defiance` | `https://github.com/guilloboi1917/ns3-DEFIANCE-MT` | `main` |
-| `contrib/quic` | `https://github.com/guilloboi1917/quic-ns-3.47` | fork head (transport part only) |
+| `contrib/nr` | `git@gitlab.com:nisaak/nr-mt.git` | tag `thesis-submission` |
+| `contrib/ai` | `https://github.com/guilloboi1917/ns3-ai-MT` | tag `thesis-submission` |
+| `contrib/defiance` | `https://github.com/guilloboi1917/ns3-DEFIANCE-MT` | tag `thesis-submission` |
+| `contrib/quic` | `https://github.com/guilloboi1917/quic-ns-3` | tag `thesis-submission` |
 
-Clone the ns-3 fork first; `contrib/ai` and `contrib/defiance` must sit under
-`contrib/`. RL checkpoints are tied to one exact build: results do not transfer
-across the nr v5.0 -> v5.1 change.
+All five repositories carry the same annotated tag `thesis-submission`; check it
+out in each one. The tags are fixed snapshots, so later branch commits do not
+change what the thesis refers to. Clone the ns-3 fork first; `contrib/ai` and
+`contrib/defiance` must sit under `contrib/`. RL checkpoints are tied to one
+exact build: results do not transfer across the nr v5.0 -> v5.1 change.
 
 ## Prerequisites (Ubuntu 22.04)
 
