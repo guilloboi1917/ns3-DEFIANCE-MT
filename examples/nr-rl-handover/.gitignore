@@ -3,8 +3,10 @@
 *.flowmonitor
 __pycache__/
 *.pyc
-/output
-/results
+/output/*
+!/output/.gitkeep
+/results/*
+!/results/.gitkeep
 /results-unsteered
 
 # campaign drivers are local scaffolding; only the README is tracked
