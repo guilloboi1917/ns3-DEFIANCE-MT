@@ -11,6 +11,7 @@ import sys
 
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 import pandas as pd
 import os
@@ -201,6 +202,11 @@ parser.add_argument("--ewma", nargs="?", type=float, const=0.05, default=None,
 parser.add_argument("--split-figures", action="store_true",
                     help="save each panel as its own PNG under "
                          "<out_dir>/figures/ (panels without data are skipped)")
+parser.add_argument("--panels", type=str, default=None,
+                    help="comma-separated panel names to draw, in order, as one "
+                         "full-width row each (default: all populated panels); "
+                         "names: cwnd,rtt,sinr,phy-rate,mcs,corrupt,goodput,"
+                         "serving,reward,rb-util,rsrp-cells,rsrq-cells")
 args = parser.parse_args()
 
 
@@ -368,16 +374,35 @@ def main(argv=None):
     legend_specs = []  # (ax, handles, labels, loc, bbox) recorded per panel
 
     def _record_legend(ax, handles, labels, loc="upper left", bbox=None,
-                       fontsize=6):
-        legend_specs.append(dict(ax=ax, handles=list(handles),
-                                 labels=list(labels), loc=loc, bbox=bbox,
-                                 fontsize=fontsize))
+                       fontsize=6, owner=None):
+        # owner is the axes that carries the legend. It differs from ax on
+        # panels with a twin axis, because the twin is drawn after the primary
+        # axis and would otherwise paint over the legend.
+        legend_specs.append(dict(ax=ax,
+                                 owner=owner if owner is not None else ax,
+                                 handles=list(handles), labels=list(labels),
+                                 loc=loc, bbox=bbox, fontsize=fontsize))
 
     def _draw_ho_markers(ax):
         if ho is not None and not ho.empty:
             for _, row in ho.iterrows():
-                ax.axvline(x=row["time"], color="green", linestyle="--",
-                           alpha=0.5, linewidth=0.7)
+                t = row["time"]
+                ax.axvline(x=t, color="green", linestyle="--",
+                           alpha=0.85, linewidth=1.3)
+                # Tick below the axis so the handover times stay legible when
+                # the dashed line is thin or the panel is crowded.
+                ax.plot([t, t], [-0.03, 0.0],
+                        transform=ax.get_xaxis_transform(),
+                        color="green", linewidth=2.0, clip_on=False,
+                        solid_capstyle="butt", zorder=5)
+
+    def _legend(ax, handles, labels, **kw):
+        """Panel legend drawn above every artist, with an opaque frame so the
+        traced lines cannot show through the labels."""
+        kw.setdefault("framealpha", 1.0)
+        leg = ax.legend(handles, labels, **kw)
+        leg.set_zorder(60)
+        return leg
 
     def _attach_ho_legend():
         """Add one 'Handover' entry to the last recorded legend of this
@@ -391,7 +416,7 @@ def main(argv=None):
         kw = dict(fontsize=spec["fontsize"], loc=spec["loc"])
         if spec["bbox"] is not None:
             kw["bbox_to_anchor"] = spec["bbox"]
-        spec["ax"].legend(spec["handles"], spec["labels"], **kw)
+        _legend(spec["owner"], spec["handles"], spec["labels"], **kw)
 
     def _render_legends():
         """Render every recorded panel legend, then add the figure-wide
@@ -400,23 +425,26 @@ def main(argv=None):
             kw = dict(fontsize=spec["fontsize"], loc=spec["loc"])
             if spec["bbox"] is not None:
                 kw["bbox_to_anchor"] = spec["bbox"]
-            spec["ax"].legend(spec["handles"], spec["labels"], **kw)
+            _legend(spec["owner"], spec["handles"], spec["labels"], **kw)
         _attach_ho_legend()
 
     def _pad_top_for_legend(fig):
         """Extend the y-range top of every inside-axes legend so the legend's
         own height is always empty space above the data (legend box is
-        anchored to the axes top, so data must be pushed down below it)."""
+        anchored to the axes top, so data must be pushed down below it).
+        The headroom is reserved on the panel's own axis only, never on a twin
+        axis: the twin carries bounded quantities in the reward panel, so
+        pushing its top would show a normalized axis above one."""
         fig.canvas.draw()
         renderer = fig.canvas.get_renderer()
         for spec in legend_specs:
             if spec["bbox"] is not None:
                 continue  # legend outside the axes, nothing overlaps
-            ax = spec["ax"]
-            lg = ax.get_legend()
+            lg = spec["owner"].get_legend()
             if lg is None:
                 continue
             leg_h = lg.get_window_extent(renderer).height
+            ax = spec["ax"]
             ax_h = ax.get_window_extent(renderer).height
             if ax_h <= 0 or leg_h <= 0:
                 continue
@@ -508,29 +536,29 @@ def main(argv=None):
             t = dl_sinr["time"].to_numpy()
             y = dl_sinr["sinr"].to_numpy()
             if ewma_alpha is not None:
-                _draw_series(ax, t, y, 0.2, "tab:green",
-                             _ewma_suffix("DL SINR (data)"))
+                _draw_series(ax, t, y, 0.2, "tab:orange",
+                             _ewma_suffix("DL SINR"))
             else:
                 win = 1 if args.raw else (args.smooth or 100)
                 s = dl_sinr["sinr"].rolling(window=win, center=True,
                                             min_periods=1).median()
                 t2, y2 = _insert_nan_at_gaps(t, s.to_numpy(), 0.2)
-                ax.plot(t2, y2, linewidth=0.8, color="tab:green", alpha=0.7,
-                        label="DL SINR (data)")
+                ax.plot(t2, y2, linewidth=0.8, color="tab:orange", alpha=0.7,
+                        label="DL SINR")
         if ok(ul_sinr_srs):
             # The UlSrsSinrLogger already filters to the serving cell.
             t = ul_sinr_srs["time"].to_numpy()
             y = ul_sinr_srs["sinr"].to_numpy()
             if ewma_alpha is not None:
-                _draw_series(ax, t, y, 0.2, "tab:cyan",
-                             _ewma_suffix("UL SINR (SRS)"), ls="--")
+                _draw_series(ax, t, y, 0.2, "tab:blue",
+                             _ewma_suffix("UL SINR"))
             else:
                 win = 1 if args.raw else (args.smooth or 100)
                 s = ul_sinr_srs["sinr"].rolling(window=win, center=True,
                                                 min_periods=1).mean()
                 t2, y2 = _insert_nan_at_gaps(t, s.to_numpy(), 0.2)
-                ax.plot(t2, y2, linewidth=0.8, color="tab:cyan",
-                        linestyle="--", alpha=0.7, label="UL SINR (SRS)")
+                ax.plot(t2, y2, linewidth=0.8, color="tab:blue",
+                        alpha=0.7, label="UL SINR")
         _record_legend(ax, *ax.get_legend_handles_labels(), loc="upper right")
 
     def draw_rate(ax):
@@ -592,7 +620,7 @@ def main(argv=None):
         ax.set_title("Per-TB Corruption (200 ms bins)")
         ax.grid(True)
         bin_w = 0.2
-        for rx_df, color, lbl in ((dl_rx, "tab:blue", "DL"),
+        for rx_df, color, lbl in ((dl_rx, "tab:green", "DL"),
                                   (ul_rx, "tab:orange", "UL")):
             if not ok(rx_df):
                 continue
@@ -636,7 +664,7 @@ def main(argv=None):
         ax.grid(True)
         h1, l1 = ax.get_legend_handles_labels()
         h2, l2 = axb.get_legend_handles_labels()
-        _record_legend(ax, h1 + h2, l1 + l2)
+        _record_legend(ax, h1 + h2, l1 + l2, owner=axb)
 
     def draw_serving(ax):
         axb = ax.twinx()
@@ -654,34 +682,20 @@ def main(argv=None):
         axb.set_ylabel("RSRQ (dB)")
         h1, l1 = ax.get_legend_handles_labels()
         h2, l2 = axb.get_legend_handles_labels()
-        _record_legend(ax, h1 + h2, l1 + l2)
+        _record_legend(ax, h1 + h2, l1 + l2, owner=axb)
 
     def draw_reward(ax):
         t = rl_reward["time"]
-        # The campaign uses the FIXED rlRewardRefMbps (the EWMA-adaptive ref
-        # is an optional legacy reward-app flag, off by default), so
-        # dynRef/dynMin plot the fixed reference and floor.
         ax.plot(t, rl_reward["goodput_mbps"], linewidth=1.0,
                 color="tab:purple", label="Goodput (sink Mbps)")
-        ax.plot(t, rl_reward["dynRef_mbps"], linewidth=0.8, color="tab:green",
-                linestyle="--", label="reward ref (rlRewardRefMbps)")
-        ax.plot(t, rl_reward["dynMin_mbps"], linewidth=0.8, color="tab:olive",
-                linestyle=":", label="reward min")
-        ga = ewma_alpha if ewma_alpha is not None else 0.2
-        ewma = rl_reward["goodput_mbps"].ewm(alpha=ga).mean()
-        ax.plot(t, ewma, linewidth=0.8, color="tab:orange",
-                linestyle="--", alpha=0.7,
-                label=f"Goodput EWMA (a={ga:.2g})")
-        ax.set_ylabel("Throughput (Mbps)")
-        ax.set_title("Reward Components (multiplicative R_G x R_H)")
+        ax.set_ylabel("Goodput (Mbps)")
+        ax.set_title("Reward Components")
         ax.grid(True)
         axb = ax.twinx()
-        axb.plot(t, rl_reward["normGoodput"], linewidth=0.8, color="tab:blue",
-                 linestyle="--", alpha=0.6, label="normGoodput")
         axb.plot(t, rl_reward["rg"], linewidth=0.8, color="tab:cyan",
                  linestyle="--", alpha=0.6, label="R_G (goodput term)")
-        axb.plot(t, rl_reward["rH"], linewidth=0.8, color="tab:orange",
-                 linestyle=":", alpha=0.6, label="R_H (handover term)")
+        axb.plot(t, rl_reward["rH"], linewidth=1.1, color="tab:orange",
+                 linestyle="-.", alpha=0.8, label="R_H (handover term)")
         axb.plot(t, rl_reward["reward"], linewidth=1.2, color="tab:red",
                  label="Reward (total)")
         axb.axhline(y=0, color="gray", linestyle=":", alpha=0.3,
@@ -689,7 +703,8 @@ def main(argv=None):
         axb.set_ylabel("Normalized reward components")
         h1, l1 = ax.get_legend_handles_labels()
         h2, l2 = axb.get_legend_handles_labels()
-        _record_legend(ax, h1 + h2, l1 + l2, fontsize=5)
+        _record_legend(ax, h1 + h2, l1 + l2, loc="upper right", fontsize=5,
+                       owner=axb)
 
     def draw_rbutil(ax):
         # Serving-cell RB utilization, per slot (1 ms). The default draw uses
@@ -721,9 +736,8 @@ def main(argv=None):
         _record_legend(ax, *ax.get_legend_handles_labels(), loc="upper right")
 
     def _draw_cells(ax, column, ylabel, title):
-        # Per-cell measurements with the serving-cell highlight overlaid in
-        # thick lines (split at gaps so non-contiguous serving periods never
-        # connect across handovers; single samples draw a small marker).
+        # Per-cell measurements with the serving-cell highlight overlaid as a
+        # continuous bold trace, coloured by the serving cell of each edge.
         cell_ids = sorted(rsrp_rsrq_full["cellId"].unique())
         colors = plt.cm.gist_ncar(np.linspace(0, 0.9, len(cell_ids)))
         for idx, cell_id in enumerate(cell_ids):
@@ -731,22 +745,54 @@ def main(argv=None):
             ax.plot(cell_data["time"], cell_data[column], linewidth=0.6,
                     color=colors[idx], alpha=0.5,
                     label=f"Cell {int(cell_id)}")
-        serving = rsrp_rsrq_full[rsrp_rsrq_full["isServingCell"] == 1].copy()
+        # Serving highlight: connect every consecutive serving sample so even
+        # periods shorter than the report interval (fast ping-pong) stay
+        # visible - a single sample is drawn as the tail of the previous edge
+        # rather than an isolated dot. The trace breaks only where the
+        # serving report itself is missing (> 0.5 s with no serving sample).
+        # Each edge is attributed to the serving cell of its END sample and is
+        # anchored on that cell's own measurement at both report instants, so
+        # at a handover the t -> t+1 edge starts from the NEW cell's RSRP at t
+        # (not the old cell's value), which also makes the colour switch at t.
+        serving = rsrp_rsrq_full[rsrp_rsrq_full["isServingCell"] == 1] \
+            .sort_values("time")
+        color_of = {int(cid): col for cid, col in zip(cell_ids, colors)}
         if not serving.empty:
-            for idx, cell_id in enumerate(cell_ids):
-                seg = serving[serving["cellId"] == cell_id].sort_values("time")
-                if seg.empty:
-                    continue
-                gap = seg["time"].diff() > 0.5  # handover away and back
-                seg = seg.assign(_seg=gap.cumsum())
-                for _, segment in seg.groupby("_seg"):
-                    if len(segment) >= 2:
-                        ax.plot(segment["time"], segment[column],
-                                linewidth=1.2, color=colors[idx], alpha=1.0)
-                    else:
-                        ax.plot(segment["time"], segment[column], marker="o",
-                                markersize=2, color=colors[idx], alpha=1.0,
-                                linestyle="")
+            t_srv = serving["time"].to_numpy()
+            y_srv = serving[column].to_numpy()
+            c_srv = serving["cellId"].to_numpy()
+            # Every cell's measurement at every report time, so a handover
+            # edge can be anchored on the new cell's own value.
+            meas = {(int(cid), float(tt)): vv
+                    for cid, tt, vv in zip(rsrp_rsrq_full["cellId"],
+                                           rsrp_rsrq_full["time"],
+                                           rsrp_rsrq_full[column])}
+            pairs = np.column_stack([np.arange(len(t_srv) - 1),
+                                     np.arange(1, len(t_srv))]) \
+                if len(t_srv) > 1 else np.empty((0, 2), dtype=int)
+            if len(pairs):
+                keep = np.diff(t_srv) <= 0.5
+                pairs = pairs[keep]
+                edge_cell = c_srv[pairs[:, 1]]
+                p_start = np.column_stack([
+                    t_srv[pairs[:, 0]],
+                    [meas.get((int(c), float(tt)), np.nan)
+                     for c, tt in zip(edge_cell, t_srv[pairs[:, 0]])]])
+                p_end = np.column_stack([t_srv[pairs[:, 1]],
+                                         y_srv[pairs[:, 1]]])
+                ax.add_collection(LineCollection(
+                    np.stack([p_start, p_end], axis=1),
+                    colors=[color_of[int(c)] for c in edge_cell],
+                    linewidths=1.4))
+            # Serving samples isolated by a reporting gap on both sides.
+            isolated = np.ones(len(t_srv), dtype=bool)
+            if len(t_srv) > 1:
+                gaps = np.diff(t_srv) > 0.5
+                isolated[1:] &= gaps
+                isolated[:-1] &= gaps
+            if isolated.any():
+                ax.scatter(t_srv[isolated], y_srv[isolated], s=8, zorder=3,
+                           c=[color_of[int(cid)] for cid in c_srv[isolated]])
         ax.set_ylabel(ylabel)
         ax.set_title(title)
         ax.grid(True)
@@ -754,12 +800,10 @@ def main(argv=None):
                        bbox=(1.02, 1.0))
 
     def draw_rsrp_cells(ax):
-        _draw_cells(ax, "rsrp", "RSRP (dBm)",
-                    "RSRP per Cell (200ms ReportUeMeasurements)")
+        _draw_cells(ax, "rsrp", "RSRP (dBm)", "RSRP per Cell")
 
     def draw_rsrq_cells(ax):
-        _draw_cells(ax, "rsrq", "RSRQ (dB)",
-                    "RSRQ per Cell (200ms ReportUeMeasurements)")
+        _draw_cells(ax, "rsrq", "RSRQ (dB)", "RSRQ per Cell")
 
     # Ordered panel list: (name, draw fn, full-width row).
     half_panels = []
@@ -786,6 +830,17 @@ def main(argv=None):
     if has_cells:
         full_panels.append(("rsrp-cells", draw_rsrp_cells))
         full_panels.append(("rsrq-cells", draw_rsrq_cells))
+
+    if args.panels:
+        # Curated selection: one full-width row per requested panel, since the
+        # default two-column grid is tuned for the full panel set.
+        available = dict(half_panels + full_panels)
+        want = [p.strip() for p in args.panels.split(",") if p.strip()]
+        missing = [p for p in want if p not in available]
+        if missing:
+            sys.exit(f"[ERROR] panel(s) not available: {', '.join(missing)}; "
+                     f"choose from: {', '.join(available)}")
+        half_panels, full_panels = [], [(p, available[p]) for p in want]
 
     if args.split_figures:
         # ---- one PNG per populated panel --------------------------------

@@ -60,6 +60,7 @@ def main():
     script = Path(__file__).with_name("feature-importance.py")
     cell = Path(args.cell_dir)
     per_seed = []
+    dropped = []
 
     for seed in range(1, args.seeds + 1):
         seed_dir = cell / f"seed_{seed}"
@@ -83,6 +84,12 @@ def main():
             df = pd.read_csv(csv)
         total = df["importance"].sum()
         if total <= 0:
+            # Permuting any single feature never flips the argmax action in this
+            # seed, so the per-seed share is undefined. Expected in the
+            # sparse-action clean regime; record the seed so the reported seed
+            # count is traceable.
+            dropped.append(seed)
+            print(f"seed {seed}: zero permutation importance, skipped")
             continue
         df["share"] = 100.0 * df["importance"] / total
         df["seed"] = seed
@@ -117,7 +124,7 @@ def main():
     head = f"""# Feature importance — {cell.parent.name}/{cell.name}
 
 Permutation importance, mean over {len(per_seed)} seeds (checkpoint {Path(args.checkpoint).name}{', ' + args.note if args.note else ''}).
-Per-feature share of total permutation importance, normalized per seed; rank_std = std of the feature's rank across seeds (low = consistent). The `_t` frame is the current step, `_t-1` the previous stacked frame (obsStackFrames = 2).
+{('Seeds attempted: ' + str(args.seeds) + '; dropped (zero permutation importance): ' + ', '.join(str(s) for s in dropped) + '.' + chr(10)) if dropped else ''}Per-feature share of total permutation importance, normalized per seed; rank_std = std of the feature's rank across seeds (low = consistent). The `_t` frame is the current step, `_t-1` the previous stacked frame (obsStackFrames = 2).
 
 ## Feature-block shares
 

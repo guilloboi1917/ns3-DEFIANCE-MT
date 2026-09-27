@@ -29,6 +29,7 @@ BASE_METRICS = [
     ("reward_total", "-", "total episode reward (RL)"),
     ("reward_mean", "-", "mean per-step reward (RL)"),
     ("handovers", "count", "completed handovers (HandoverEndOk)"),
+    ("firstHandoverS", "s", "time of the first completed handover (opening-window exposure)"),
     ("handovers_completed", "count", "completed handovers (RL, alias of handovers)"),
     ("handover_steps", "count", "reward steps inside the hangover window (RL)"),
     ("pingPongCount", "count", "A->B->A ping-pong patterns"),
@@ -41,6 +42,10 @@ BASE_METRICS = [
     ("perTbSinrDb_avg", "dB", "mean per-TB SINR (rx-sinr)"),
     ("perTbSinrDb_p50", "dB", "median per-TB SINR (rx-sinr)"),
     ("mcs_p50", "-", "median MCS (rx-sinr)"),
+    ("harqTbAttempts", "count", "UL HARQ TB decode attempts (gNB UlHarqFeedbackTrace)"),
+    ("harqNackPct", "%", "share of UL HARQ feedbacks with CRC failure"),
+    ("harqNackPctInHo", "%", "UL HARQ NACK share inside a handover window"),
+    ("harqNackPctOutHo", "%", "UL HARQ NACK share outside handover windows"),
     ("SinrDb_avg", "dB", "mean direction SINR (dl_sinr / ul_sinr_srs)"),
     ("SinrDb_p50", "dB", "median direction SINR"),
     ("rsrpServingDbm_avg", "dBm", "mean serving-cell RSRP (ue_meas_report)"),
@@ -157,6 +162,46 @@ def count_ping_pong(times: np.ndarray, cells: np.ndarray, window_s: float = 2.0)
     mask = ((cells[:-2] == cells[2:]) & (cells[:-2] != cells[1:-1])
             & (times[2:] - times[:-2] < window_s))
     return int(mask.sum())
+
+
+# Handover window for the in/out HARQ NACK split: [t_ho - HO_WIN_PRE_S,
+# t_ho + HO_WIN_POST_S]. The UL TB error rate is elevated only in the short
+# transient around a handover; the effect dilutes beyond +-0.5 s.
+HO_WIN_PRE_S = 0.2
+HO_WIN_POST_S = 0.2
+
+
+def parse_harq(path: Path):
+    """UL HARQ feedback summary.
+
+    One row per gNB PHY UlHarqFeedbackTrace event, i.e. per transport-block
+    decode attempt (first transmission and HARQ retransmissions); a NACK is a
+    TB that failed the CRC check. Returns the attempt count, the overall NACK
+    share, and per-sample times/flags for the in/out handover split. This is a
+    UL metric: DL-only flows have few or no samples.
+    """
+    df = read_rows(path, ["time", "rnti", "isReceivedOk"])
+    if df.empty:
+        return {"harqTbAttempts": _nan(), "harqNackPct": _nan(),
+                "times": np.array([]), "nack": np.array([], dtype=bool)}
+    t = df["time"].to_numpy(dtype=float)
+    nack = df["isReceivedOk"].to_numpy(dtype=float) < 0.5
+    return {"harqTbAttempts": float(len(t)),
+            "harqNackPct": float(100.0 * np.mean(nack)),
+            "times": t, "nack": nack}
+
+
+def harq_nack_split(harq: dict, ho_times: np.ndarray):
+    """(nack_pct_in_ho, nack_pct_out_ho); NaN when a side has no samples."""
+    t, nack = harq["times"], harq["nack"]
+    if len(t) == 0:
+        return _nan(), _nan()
+    inho = np.zeros(len(t), dtype=bool)
+    for h in ho_times:
+        inho |= (t >= h - HO_WIN_PRE_S) & (t <= h + HO_WIN_POST_S)
+    pct_in = float(100.0 * np.mean(nack[inho])) if inho.any() else _nan()
+    pct_out = float(100.0 * np.mean(nack[~inho])) if (~inho).any() else _nan()
+    return pct_in, pct_out
 
 
 def parse_rx_sinr(path: Path):
@@ -297,6 +342,8 @@ def analyze_seed(seed_dir: Path, sim_time: float) -> dict:
     sinr_avg, sinr_p50 = parse_sinr(seed_dir / sinr_csv)
     rsrp_avg, rsrp_p50, rsrq_avg = parse_ue_meas(seed_dir / "ue_meas_report.csv")
     ho_count, ho_times, ho_cells = parse_handovers(seed_dir / "nr-rl-handovers.csv")
+    harq = parse_harq(seed_dir / "nr-rl-ul-harq.csv")
+    harq_in, harq_out = harq_nack_split(harq, ho_times)
     rx = parse_rx_sinr(seed_dir / rx_csv)
     fm = parse_flowmon(seed_dir / "nr-rl.flowmonitor")
     rew = parse_reward(seed_dir / "rl_reward.csv")
@@ -322,6 +369,7 @@ def analyze_seed(seed_dir: Path, sim_time: float) -> dict:
         "reward_mean": rew["reward_mean"],
         "handovers": float(ho_count),
         "handovers_completed": float(ho_count),
+        "firstHandoverS": float(ho_times.min()) if len(ho_times) else float("nan"),
         "handover_steps": rew["handover_steps"],
         "pingPongCount": float(count_ping_pong(ho_times, ho_cells)),
         "pingpong_steps": rew["pingpong_steps"],
@@ -334,6 +382,10 @@ def analyze_seed(seed_dir: Path, sim_time: float) -> dict:
         "perTbSinrDb_avg": rx["perTbSinrDb_avg"],
         "perTbSinrDb_p50": rx["perTbSinrDb_p50"],
         "mcs_p50": rx["mcs_p50"],
+        "harqTbAttempts": harq["harqTbAttempts"],
+        "harqNackPct": harq["harqNackPct"],
+        "harqNackPctInHo": harq_in,
+        "harqNackPctOutHo": harq_out,
         f"{flow}SinrDb_avg": sinr_avg,
         f"{flow}SinrDb_p50": sinr_p50,
         "rsrpServingDbm_avg": rsrp_avg,

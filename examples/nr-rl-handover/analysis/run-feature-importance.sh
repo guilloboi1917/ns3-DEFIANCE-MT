@@ -1,10 +1,23 @@
 #!/usr/bin/env bash
-# Regenerate the permutation feature-importance summaries for the canonical
-# cells (one checkpoint at a time, so the transport/regime effect on the
-# policy's information use is visible). Writes feature-importance.csv,
-# feature-importance-summary.md and feature-importance-avg.png per cell.
+# Regenerate the permutation feature-importance summaries for the three native
+# arms of the corrected (post-interface-fix, uniformly unsteered) RL evaluation:
 #
-# Usage: ./analysis/run-feature-importance.sh [SEEDS=5 REPEAT=2 LIMIT=0.2 ...]
+#   clean TCP            PPO_2026-09-20_13-59-15   native clean regime
+#   interfered TCP       PPO_2026-09-21_12-07-15   native interference regime
+#   interfered QUIC      PPO_2026-09-21_12-07-15   native interference regime
+#
+# Writes feature-importance.csv, feature-importance-summary.md and
+# feature-importance-avg.png per cell.
+#
+# 2026-09-23: repointed from the retired steered-campaign cells
+# (results/agent-eval-ul-{no-if-tcp,if-tcp,no-if-quic,if-quic}-beta5) on the
+# pre-fix checkpoint PPO_2026-09-07_13-52-01, which no longer exist. The old
+# set held one checkpoint across four cells; the current set is native-per-cell
+# (each cell evaluated with the checkpoint trained for it), so the columns are
+# not a checkpoint-controlled comparison - that comparison is the zero-shot
+# transfer cells, which are not part of this table.
+#
+# Usage: ./analysis/run-feature-importance.sh [SEEDS=20 REPEAT=3 LIMIT=0.5 ...]
 
 set -u -o pipefail
 
@@ -48,18 +61,17 @@ run_cell() {
         || echo "WARNING: $cell failed"
 }
 
-run_cell "$ROOT/checkpoints/PPO_2026-09-07_13-52-01" \
-    "results/agent-eval-ul-no-if-tcp-beta5/triangle-ul-no-if-tcp-beta5" \
-    "TCP, rlBetaHandover 5.0, clean regime (addInterferingUes=0)"
-run_cell "$ROOT/checkpoints/PPO_2026-09-02_20-53-50" \
-    "results/agent-eval-ul-if-tcp/triangle-ul-if-tcp" \
-    "TCP, native interference regime (addInterferingUes=4)"
-run_cell "$ROOT/checkpoints/PPO_2026-09-07_13-52-01" \
-    "results/agent-eval-ul-no-if-quic/triangle-ul-no-if-quic" \
-    "QUIC, rlBetaHandover 5.0, clean regime (addInterferingUes=0)"
-run_cell "$ROOT/checkpoints/PPO_2026-09-07_13-52-01" \
-    "results/agent-eval-ul-if-quic/triangle-ul-if-quic" \
-    "QUIC, rlBetaHandover 5.0, interference regime (addInterferingUes=4)"
+run_cell "$HOME/ray_results/PPO_2026-09-20_13-59-15" \
+    "results-unsteered/agent-eval-ul-no-if-tcp-beta5-fixed/triangle-ul-no-if-tcp-fixed" \
+    "TCP, clean regime, native (checkpoint PPO_2026-09-20_13-59-15)"
+
+run_cell "$HOME/ray_results/PPO_2026-09-21_12-07-15" \
+    "results-unsteered/agent-eval-ul-if-tcp-beta5-fixed-native/triangle-ul-if-tcp-fixed-native" \
+    "TCP, four aerial interferers, native (checkpoint PPO_2026-09-21_12-07-15)"
+
+run_cell "$HOME/ray_results/PPO_2026-09-21_12-07-15" \
+    "results-unsteered/agent-eval-ul-if-quic-beta5-fixed-native/triangle-ul-if-quic-fixed-native" \
+    "QUIC, four aerial interferers, native (checkpoint PPO_2026-09-21_12-07-15)"
 
 echo
 echo "==================================================================="
