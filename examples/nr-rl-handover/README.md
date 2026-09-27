@@ -91,7 +91,8 @@ python3 run-evaluations.py evaluation-scenarios/rl/agent-eval-ul-if-tcp.yaml --j
   the reward/obs settings from the checkpoint's training meta.
 - Seeds land in `results/<name>/<tag>/seed_N/`; the analyzer writes `raw.csv` and
   `aggregate.csv` per cell and excludes failed seeds.
-- `sync-thesis-data.py` mirrors cells into the Overleaf `EvaluationData/` bundle.
+- `sync-thesis-data.py --results results-unsteered results` mirrors the cells
+  into the Overleaf `EvaluationData/` bundle and writes `manifest.csv`.
 
 ## Layout
 
@@ -105,6 +106,8 @@ run-evaluations.py                  evaluation runner
 analysis/                           feature importance, flowmon parsing
 plots/                              per-run stats and UAV-path figures
 profiling/                          perf and per-step latency profiling
+results/                            evaluation outputs (per-cell seed_N dirs)
+output/                             scratch run output
 campaigns/                          local campaign drivers (not committed)
 checkpoints/                        mirrored PPO policies (see README)
 docs/                               local working notes (not committed)
