@@ -1,0 +1,54 @@
+# Template for the PPO training configs (UL, nr-rl-handover).
+# training_params map to run-agent -p key=value; ns3_settings to -c key=value.
+type: train
+env_name: defiance-nr-rl-handover
+trainable: PPO
+iterations: 100                  # training iterations
+max_episode_steps: 100           # informational for multi-agent
+checkpoint_path: null
+rollout_fragment_length: null
+sample_timeout: 1200.0
+evaluation_num_env_runners: 0
+evaluation_interval: 2
+evaluation_duration: "1"
+evaluation_sample_timeout: 600.0
+
+training_params:
+  minibatch_size: 128
+  entropy_coeff: [[0, 0.025], [40000, 0.01]]
+  kl_target: 0.01
+  lr: [[0, 0.0005], [40000, 0.00005]]
+  vf_loss_coeff: 1.0
+  vf_clip_param: 10.0
+  lambda_: 0.9
+  gamma: 0.9
+
+ns3_settings:
+  parallel: "7"
+  simDuration: "50"              # episode length, s
+  topology: triangle
+  rlMode: "true"
+  handoverAlgorithm: agent
+  transportProtocol: tcp         # tcp | udp | quic
+  flowDirection: ul
+  addInterferingUes: "0"         # aerial interferers
+  aerialUeRatio: "1.0"
+  interfererMobility: static
+  stepTime: "400"                # RL decision step, ms
+  obsStackFrames: "2"            # stacked observation frames
+  rlAlphaGoodput: "0.8"          # unused with multiplicative reward
+  rlBetaGoodput: "5"             # unused with multiplicative reward
+  rlBetaHandover: "5.0"          # handover penalty weight
+  rlRewardComposition: multiplicative
+  rlPingPongMultiplier: "5"      # penalty multiplier for a ping-pong
+  rlPingPongWindowMs: "0"        # max age of an A->B->A ping-pong, ms; 0 = no limit
+  rlHandoverHangoverLength: "1"  # penalised steps after a handover
+  rlRewardRefMbps: "35"          # goodput normalisation reference
+  rlRewardGoodputShape: "compl_pwr"
+  rlRewardGoodputP: "0.4"
+  bandwidthMhz: "30"
+  numerology: "1"                # 0 = 15 kHz SCS, 1 = 30 kHz
+  trafficRateMbps: "100"         # offered load
+  errorModel: "eesm-ir-t1"
+  channelUpdateMs: "20"
+  logging: "false"
