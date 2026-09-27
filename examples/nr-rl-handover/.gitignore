@@ -5,6 +5,11 @@ __pycache__/
 *.pyc
 /output
 /results
+/results-unsteered
+
+# campaign/eval run logs (records live in campaigns/README.md and checkpoints/)
+/campaigns/*.log
+/campaigns/unsteered-logs/
 
 # keep the mirrored per-run training records (see checkpoints/README.md)
 !checkpoints/*/progress.csv
