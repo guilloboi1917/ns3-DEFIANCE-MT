@@ -29,6 +29,14 @@ double g_aerialUeRatio = 0.0;
 std::string g_interfererMobility = "static";
 bool g_logging = false;
 bool rlMode = false;
+bool idealRrc = true; // RRC protocol model: true = ideal (5G-LENA default), false = real
+// Canonical environment is uniformly unsteered: gNB quasi-omni for the whole
+// episode. The pre-2026-09-18 default was "directpath", whose gNB steering is
+// applied only while the UAV remains on the cell it attached to at initial
+// attachment (5G-LENA limitation), so it decayed to quasi-omni after the first
+// handover; that default produced the 2026-09 steered campaign dataset. Pass
+// --beamformingMethod=directpath explicitly to reproduce it.
+std::string beamformingMethod = "quasiomni";
 std::string handoverAlgorithm = "a3";
 double a3HysteresisDb = 3.0;   // A3 hysteresis (dB)
 uint32_t a3TttMs = 256;       // A3 time-to-trigger (ms)
@@ -39,6 +47,7 @@ double rlBetaGoodput = 5.0;              ///< Deng-style: goodput sensitivity
 double rlBetaHandover = 5.0;             ///< Deng-style: handover sensitivity
 std::string rlRewardComposition = "multiplicative"; ///< Reward combination: additive | multiplicative
 double rlPingPongMultiplier = 5.0;            ///< betaHandover multiplier on A->B->A ping-pong
+uint32_t rlPingPongWindowMs = 0;              ///< Max age (ms) of an A->B->A pair to count as ping-pong; 0 = no limit
 uint32_t rlHandoverHangoverLength = 1;        ///< Reward tax duration (steps) per handover event
 uint32_t rlHandoverRateWindowMs = 10000;      ///< Sliding window for the ho_count_10s obs count (ms)
 double rlRewardRefMbps = 15.0;                ///< Reward/obs goodput reference (Mbps): normG = goodput/ref
@@ -57,6 +66,7 @@ uint32_t channelUpdateMs = 20;               ///< channel UpdatePeriod ms (0 = d
 std::string channelModel = "umav";          ///< channel: umav (3GPP TR 38.901 UMa-AV, default) | tworay (TwoRaySpectrumPropagationLossModel)
 std::string g_flowDirection = "ul";
 std::string g_transportProtocol = "udp";
+std::string g_rlcMode = "auto";  ///< RLC mode override: auto (per transport) | am | um
 uint32_t g_senderNodeId = 0;     //!< Node ID running OnOff (varies by flowDirection)
 uint32_t g_receiverNodeId = 0;   //!< Node ID running PacketSink (varies by flowDirection)
 int parallel = 0;
@@ -184,6 +194,18 @@ main(int argc, char* argv[])
     cmd.AddValue("handoverAlgorithm", "Handover algorithm (a3, noop, agent)", handoverAlgorithm);
     cmd.AddValue("a3HysteresisDb", "A3 hysteresis in dB (a3 only)", a3HysteresisDb);
     cmd.AddValue("a3TttMs", "A3 time-to-trigger in ms (a3 only)", a3TttMs);
+    cmd.AddValue("idealRrc",
+                 "Use the ideal RRC protocol model (default true); false selects the "
+                 "real RRC protocol with SRB1 signalling on the radio",
+                 idealRrc);
+    cmd.AddValue("beamformingMethod",
+                 "Beamforming method: quasiomni (QuasiOmniDirectPathBeamforming, gNB "
+                 "quasi-omni / UE steered, canonical default), directpath "
+                 "(DirectPathQuasiOmniBeamforming, gNB steered / UE quasi-omni; on the "
+                 "unpatched build the steering holds only while the UE stays on the "
+                 "cell it attached to), or directpath-both (DirectPathBeamforming, "
+                 "both sides steered)",
+                 beamformingMethod);
     cmd.AddValue("stepTime",
                  "Step time in ms between RL agent decisions (only used with rlMode)",
                  stepTime);
@@ -208,6 +230,12 @@ main(int argc, char* argv[])
                  "Multiplier applied to betaHandover on ping-pong (A->B->A) "
                  "patterns. Default 5.0.",
                  rlPingPongMultiplier);
+    cmd.AddValue("rlPingPongWindowMs",
+                 "Maximum age (ms) of an A->B->A pattern for it to count as a "
+                 "ping-pong: the two handovers back to the same cell must be at most "
+                 "this far apart. 0 (default) keeps the legacy behaviour of flagging "
+                 "any A->B->A regardless of elapsed time.",
+                 rlPingPongWindowMs);
     cmd.AddValue("rlHandoverHangoverLength",
                  "Number of steps the handover reward penalty persists after "
                  "a handover (I_ho stays true). Default 4. Halving (2) halves "
@@ -238,6 +266,11 @@ main(int argc, char* argv[])
     cmd.AddValue("rlcTxBufferBytes",
                  "RLC TX buffer cap in bytes for UM and AM (0 = unlimited)",
                  rlcTxBufferBytes);
+    cmd.AddValue("rlcMode",
+                 "RLC mode: auto (default; RLC AM for tcp/quic, RLC UM for udp) | am | "
+                 "um. 'am' runs UDP over RLC AM, isolating the link-layer ARQ "
+                 "contribution from TCP's own retransmission.",
+                 g_rlcMode);
     cmd.AddValue("tcpSndBufBytes",
                  "TCP send/receive socket buffer in bytes (default 1 MiB; the ns-3 "
                  "default 128 KiB caps the transport at ~13 Mbps on this path)",
@@ -350,6 +383,7 @@ main(int argc, char* argv[])
                   rlBetaHandover,
                   rlRewardComposition,
                   rlPingPongMultiplier,
+                  rlPingPongWindowMs,
                   rlHandoverHangoverLength,
                   rlHandoverRateWindowMs,
                   rlRewardRefMbps,
@@ -365,7 +399,10 @@ main(int argc, char* argv[])
                   channelUpdateMs,
                   numerology,
                   channelModel,
-                  outputDirCli);
+                  outputDirCli,
+                  idealRrc,
+                  beamformingMethod,
+                  g_rlcMode);
 
     // Install before Simulator::Run() so the flows are observed; serialize
     // after Run to capture the final per-flow stats.

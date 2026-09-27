@@ -53,6 +53,9 @@ NrRlHandoverRewardApp::NrRlHandoverRewardApp()
     m_handoverHistory[0] = 0;
     m_handoverHistory[1] = 0;
     m_handoverHistory[2] = 0;
+    m_handoverTimes[0] = 0.0;
+    m_handoverTimes[1] = 0.0;
+    m_handoverTimes[2] = 0.0;
 }
 
 NrRlHandoverRewardApp::~NrRlHandoverRewardApp()
@@ -119,6 +122,15 @@ NrRlHandoverRewardApp::GetTypeId()
                           DoubleValue(5.0),
                           MakeDoubleAccessor(&NrRlHandoverRewardApp::m_pingPongBetaMultiplier),
                           MakeDoubleChecker<double>(1.0))
+            .AddAttribute("PingPongWindowMs",
+                          "Maximum age of an A->B->A pattern for it to count as a "
+                          "ping-pong: the two handovers back to the same cell must be at "
+                          "most this far apart. 0 disables the age limit, in which case "
+                          "any A->B->A sequence is flagged regardless of elapsed time "
+                          "(the behaviour before 2026-09-20).",
+                          UintegerValue(0),
+                          MakeUintegerAccessor(&NrRlHandoverRewardApp::m_pingPongWindowMs),
+                          MakeUintegerChecker<uint32_t>(0, 600000))
             .AddAttribute("RewardComposition",
                           "Reward combination: 'additive' = alpha*R_G + (1-alpha)*R_H "
                           "(constant baseline on calm steps, handover tax capped at "
@@ -201,6 +213,7 @@ NrRlHandoverRewardApp::RegisterCallbacks()
                 << ", betaHandover=" << m_betaHandover
                 << ", hangover=" << m_handoverHangoverLength
                 << ", pingPongMult=" << m_pingPongBetaMultiplier
+                << ", pingPongWindowMs=" << m_pingPongWindowMs
                 << ", rewardComposition=" << m_rewardComposition
                 << ", flowDirection=" << g_flowDirection);
 }
@@ -226,11 +239,15 @@ NrRlHandoverRewardApp::ObserveHandover(const uint64_t imsi,
     m_handoverHangoverSteps = m_handoverHangoverLength;
 
     // Detect ping-pong: A->B->A pattern
-    // handoverHistory[0] = oldest, [2] = most recent
+    // handoverHistory[0] = oldest, [2] = most recent; the times are shifted with
+    // the history so the ping-pong flag can be bounded in age.
     // Shift history left by one, append new cellId
     m_handoverHistory[0] = m_handoverHistory[1];
     m_handoverHistory[1] = m_handoverHistory[2];
     m_handoverHistory[2] = cellId;
+    m_handoverTimes[0] = m_handoverTimes[1];
+    m_handoverTimes[1] = m_handoverTimes[2];
+    m_handoverTimes[2] = Simulator::Now().GetSeconds();
 }
 
 void
@@ -337,13 +354,21 @@ NrRlHandoverRewardApp::SendReward()
     }
 
     // --- 6. Ping-pong detection: A->B->A pattern ---
-    // handoverHistory[0] and [2] being equal means we bounced back
+    // handoverHistory[0] and [2] being equal means we bounced back. With a
+    // non-zero window the pair must also be recent: two handovers back to the
+    // same cell minutes apart are a legitimate return, not a ping-pong.
     bool pingPong = false;
     if (m_handoverHistory[0] > 0 && m_handoverHistory[2] > 0 &&
         m_handoverHistory[0] == m_handoverHistory[2] &&
         m_handoverHistory[0] != m_handoverHistory[1])
     {
-        pingPong = true;
+        bool withinWindow = true;
+        if (m_pingPongWindowMs > 0)
+        {
+            const double ageMs = (m_handoverTimes[2] - m_handoverTimes[0]) * 1000.0;
+            withinWindow = (ageMs <= static_cast<double>(m_pingPongWindowMs));
+        }
+        pingPong = withinWindow;
     }
 
     // --- 7. R_H — Deng inverse handover reward with ping-pong multiplier ---

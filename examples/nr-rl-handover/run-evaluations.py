@@ -36,9 +36,10 @@ RUNNER_KEYS = frozenset({
 # values override). Keep in sync whenever a reward/obs param is added.
 REWARD_ENV_KEYS = frozenset({
     "rlRewardComposition", "rlBetaHandover", "rlAlphaGoodput",
-    "rlBetaGoodput", "stepTime", "rlPingPongMultiplier",
-    "rlHandoverRateWindowMs", "rlRewardRefMbps", "rlRewardGoodputShape",
-    "rlRewardGoodputAlpha", "rlRewardGoodputP", "obsStackFrames",
+    "rlBetaGoodput", "stepTime", "rlPingPongMultiplier", "rlPingPongWindowMs",
+    "rlHandoverHangoverLength", "rlHandoverRateWindowMs", "rlRewardRefMbps",
+    "rlRewardGoodputShape", "rlRewardGoodputAlpha", "rlRewardGoodputP",
+    "obsStackFrames",
 })
 
 # Defaults matching the current campaign (results dirs / meta.yaml as ground

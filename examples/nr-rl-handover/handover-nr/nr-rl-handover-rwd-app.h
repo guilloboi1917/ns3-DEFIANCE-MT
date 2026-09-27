@@ -88,7 +88,9 @@ class NrRlHandoverRewardApp : public RewardApplication
 
     // --- Ping-pong detection ---
     double m_pingPongBetaMultiplier{5.0}; ///< Multiply beta_H by this on ping-pong (attribute default 5.0)
+    uint32_t m_pingPongWindowMs{0};       ///< Max age (ms) of an A->B->A pair to count as ping-pong; 0 = no limit
     uint32_t m_handoverHistory[3]{};      ///< Last 3 handover target cell IDs
+    double m_handoverTimes[3]{};          ///< Times (s) of those handovers, for the ping-pong window
 
     // --- Timing ---
     Time m_calculationInterval{MilliSeconds(200)}; ///< Reward step interval

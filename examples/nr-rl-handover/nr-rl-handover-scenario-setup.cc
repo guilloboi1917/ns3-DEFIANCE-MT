@@ -831,6 +831,7 @@ scenarioSetup(std::string flowDirection = "ul",
               double rlBetaHandover = 5.0,
               const std::string& rlRewardComposition = "multiplicative",
               double rlPingPongMultiplier = 5.0,
+              uint32_t rlPingPongWindowMs = 0,
               uint32_t rlHandoverHangoverLength = 1,
               uint32_t rlHandoverRateWindowMs = 10000,
               double rlRewardRefMbps = 15.0,
@@ -846,8 +847,25 @@ scenarioSetup(std::string flowDirection = "ul",
               uint32_t channelUpdateMs = 20,       // channel UpdatePeriod ms (0 = disabled/module default)
               uint32_t numerology = 0,             // 0 = 15 kHz SCS, 1 = 30 kHz SCS (n78 typical)
               std::string channelModel = "umav",   // channel: umav (3GPP UMa-AV, default) | tworay (TwoRaySpectrumPropagationLossModel)
-              std::string outputDir = "")
+              std::string outputDir = "",
+              bool idealRrc = true, // ideal RRC protocol (false = real RRC / SRB1)
+              std::string beamformingMethod = "quasiomni", // gNB beamforming: quasiomni (default) | directpath | directpath-both
+              std::string rlcMode = "auto") // RLC mode: auto (per transport) | am | um
 {
+    // Resolve the RLC mode once: "auto" keeps the per-transport policy (RLC AM
+    // for the reliable transports, RLC UM for UDP); "am"/"um" force one mode
+    // for every transport, e.g. to isolate the RLC ARQ contribution for UDP.
+    std::string effectiveRlcMode = rlcMode;
+    if (effectiveRlcMode == "auto")
+    {
+        effectiveRlcMode =
+            (transportProtocol == "tcp" || transportProtocol == "quic") ? "am" : "um";
+    }
+    else if (effectiveRlcMode != "um" && effectiveRlcMode != "am")
+    {
+        NS_FATAL_ERROR("Unknown rlcMode: " << rlcMode << " (expected auto|um|am)");
+    }
+
     if (outputDir.empty())
     {
         g_outputDir = pathToNs3 + "/contrib/defiance/examples/nr-rl-handover/output/";
@@ -938,6 +956,7 @@ scenarioSetup(std::string flowDirection = "ul",
         metaOut << "recoveryType: " << recoveryType << "\n";
         metaOut << "numerology: " << numerology << "\n";
         metaOut << "rlcTxBufferBytes: " << rlcTxBufferBytes << "\n";
+        metaOut << "rlcMode: " << effectiveRlcMode << "\n";
         metaOut << "tcpSndBufBytes: " << tcpSndBufBytes << "\n";
         metaOut << "tcpMinRtoMs: " << tcpMinRtoMs << "\n";
         metaOut << "tcpDelAckTimeoutMs: " << tcpDelAckTimeoutMs << "\n";
@@ -955,6 +974,8 @@ scenarioSetup(std::string flowDirection = "ul",
         metaOut << "aerialUeRatio: " << aerialUeRatio << "\n";
         metaOut << "rlMode: " << (rlMode ? "true" : "false") << "\n";
         metaOut << "handoverAlgorithm: " << handoverAlgorithm << "\n";
+        metaOut << "idealRrc: " << (idealRrc ? "true" : "false") << "\n";
+        metaOut << "beamformingMethod: " << beamformingMethod << "\n";
         metaOut << "a3HysteresisDb: " << a3HysteresisDb << "\n";
         metaOut << "a3TttMs: " << a3TttMs << "\n";
         metaOut << "stepTime: " << stepTime << "\n";
@@ -965,6 +986,7 @@ scenarioSetup(std::string flowDirection = "ul",
         metaOut << "rlRewardComposition: " << rlRewardComposition << "\n";
         metaOut << "rlPingPongMultiplier: " << rlPingPongMultiplier << "\n";
         metaOut << "rlHandoverHangoverLength: " << rlHandoverHangoverLength << "\n";
+        metaOut << "rlPingPongWindowMs: " << rlPingPongWindowMs << "\n";
         metaOut << "rlHandoverRateWindowMs: " << rlHandoverRateWindowMs << "\n";
         metaOut << "rlRewardRefMbps: " << rlRewardRefMbps << "\n";
         metaOut << "rlRewardGoodputShape: " << rlRewardGoodputShape << "\n";
@@ -978,6 +1000,7 @@ scenarioSetup(std::string flowDirection = "ul",
     g_nrEpcHelper = CreateObject<NrPointToPointEpcHelper>();
     g_nrChannelHelper = CreateObject<NrChannelHelper>();
     g_nrHelper = CreateObject<NrHelper>();
+    g_nrHelper->SetAttribute("UseIdealRrc", BooleanValue(idealRrc));
     g_nrHelper->SetBeamformingHelper(idealBeamformingHelper);
     g_nrHelper->SetEpcHelper(g_nrEpcHelper);
 
@@ -1047,9 +1070,33 @@ scenarioSetup(std::string flowDirection = "ul",
         errorModelType = "ns3::NrLteMiErrorModel";
     g_nrHelper->SetDlErrorModel(errorModelType);
     g_nrHelper->SetUlErrorModel(errorModelType);
-    idealBeamformingHelper->SetAttribute(
-        "BeamformingMethod",
-        TypeIdValue(TypeId::LookupByName("ns3::DirectPathQuasiOmniBeamforming")));
+    // gNB/UE beamforming method. All three share the same 4x2 gNB array and the
+    // same ThreeGppAntennaModel element:
+    //   quasiomni       - QuasiOmniDirectPathBeamforming: gNB quasi-omni, UE steered
+    //                     (the canonical default: gNB unsteered for the whole
+    //                     episode, so no arm depends on when it first hands over)
+    //   directpath      - DirectPathQuasiOmniBeamforming: gNB steered, UE quasi-omni.
+    //                     On the unpatched build the gNB vector only holds while the
+    //                     UE stays on the cell it attached to; the bf-handover-probe
+    //                     patch makes it effective on every cell (this was the
+    //                     pre-2026-09-18 default and produced the steered campaign)
+    //   directpath-both - DirectPathBeamforming: gNB steered, UE steered
+    // For the 1x1 UAV the UE-side vectors differ only in phase, so pairing
+    // directpath-both against quasiomni isolates the gNB vector and keeps the UE
+    // side identical.
+    std::string beamformingType;
+    if (beamformingMethod == "directpath")
+        beamformingType = "ns3::DirectPathQuasiOmniBeamforming";
+    else if (beamformingMethod == "quasiomni")
+        beamformingType = "ns3::QuasiOmniDirectPathBeamforming";
+    else if (beamformingMethod == "directpath-both")
+        beamformingType = "ns3::DirectPathBeamforming";
+    else
+        NS_FATAL_ERROR("Unknown beamforming method: "
+                       << beamformingMethod
+                       << ". Use directpath, quasiomni or directpath-both.");
+    idealBeamformingHelper->SetAttribute("BeamformingMethod",
+                                         TypeIdValue(TypeId::LookupByName(beamformingType)));
 
     // --- Handover algorithm ---
     // The RL observation cadence is driven by the UE PHY's ReportUeMeasurements
@@ -1516,14 +1563,11 @@ scenarioSetup(std::string flowDirection = "ul",
         g_gnbNrDevs.Add(gnb1.Get(0));
     }
 
-    // --- Configure RLC mode per transport protocol ---
-    // TCP/QUIC: RLC AM (link-layer recovery reduces handover-induced
-    // transport retransmissions); UDP: RLC UM (default, no link-layer
-    // retransmission needed)
+    // --- Configure RLC mode (auto: AM for TCP/QUIC, UM for UDP; overridable) ---
     {
-        bool reliableTransport = (transportProtocol == "tcp" || transportProtocol == "quic");
-        NrGnbRrc::NrQosFlowToRlcMapping_t rlcMode =
-            reliableTransport ? NrGnbRrc::RLC_AM_ALWAYS : NrGnbRrc::RLC_UM_ALWAYS;
+        NrGnbRrc::NrQosFlowToRlcMapping_t rlcMapping =
+            (effectiveRlcMode == "am") ? NrGnbRrc::RLC_AM_ALWAYS
+                                        : NrGnbRrc::RLC_UM_ALWAYS;
         for (uint32_t i = 0; i < g_gnbContainer.GetN(); ++i)
         {
             Ptr<NrGnbNetDevice> gnbDev =
@@ -1533,7 +1577,7 @@ scenarioSetup(std::string flowDirection = "ul",
                 Ptr<NrGnbRrc> rrc = gnbDev->GetRrc();
                 if (rrc)
                 {
-                    rrc->SetAttribute("QosFlowToRlcMapping", EnumValue(rlcMode));
+                    rrc->SetAttribute("QosFlowToRlcMapping", EnumValue(rlcMapping));
                 }
             }
         }
@@ -2101,6 +2145,7 @@ scenarioSetup(std::string flowDirection = "ul",
         rlAppHelper.SetAttribute("BetaGoodput", DoubleValue(rlBetaGoodput));
         rlAppHelper.SetAttribute("BetaHandover", DoubleValue(rlBetaHandover));
         rlAppHelper.SetAttribute("PingPongBetaMultiplier", DoubleValue(rlPingPongMultiplier));
+        rlAppHelper.SetAttribute("PingPongWindowMs", UintegerValue(rlPingPongWindowMs));
         rlAppHelper.SetAttribute("HandoverHangoverLength", UintegerValue(rlHandoverHangoverLength));
         rlAppHelper.SetAttribute("RewardComposition", StringValue(rlRewardComposition));
         rlAppHelper.SetAttribute("RewardGoodputShape", StringValue(rlRewardGoodputShape));
