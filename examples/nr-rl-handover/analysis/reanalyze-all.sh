@@ -4,7 +4,7 @@
 # now the offered window, sim_time - appStartS, see analyze-evaluations.py).
 # Analysis only: no simulations are run.
 #
-# Usage: ./campaigns/reanalyze-all.sh
+# Usage: ./analysis/reanalyze-all.sh
 
 set -u -o pipefail
 
@@ -19,7 +19,7 @@ for d in results/*/*/; do
         results/_archive*|results/_logs*) continue ;;
     esac
     ls "$d"seed_* >/dev/null 2>&1 || continue
-    if python3 analyze-evaluations.py "$d" >/dev/null; then
+    if python3 analysis/analyze-evaluations.py "$d" >/dev/null; then
         n=$((n + 1))
     else
         echo "WARNING: analyze failed for $d"

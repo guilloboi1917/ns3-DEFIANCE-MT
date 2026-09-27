@@ -63,8 +63,7 @@
 # Run:
 #   python3 .../run-evaluations.py .../evaluation-scenarios/baseline/delack-race.yaml \
 #       --jobs 6 --analyze
-#   python3 .../obsolete/analyze-timer-race.py results/delack-race
-#   (analyze-timer-race.py MOVED to obsolete/ 2026-09-11; this probe is closed)
+#   (the timer-race probe is closed; its dedicated analyzer was retired)
 
 evaluation:
   name: delack-race

@@ -2,7 +2,7 @@
 """run-evaluations.py - run a scenario matrix x seeds in parallel.
 
 Each (scenario, seed) writes results/<name>/<tag>/seed_N/.
-Analysis is separate: analyze-evaluations.py.
+Analysis is separate: analysis/analyze-evaluations.py.
 
 Usage: python3 run-evaluations.py <matrix.yaml> [--jobs N] [--analyze] [--dry-run]
 """
@@ -415,8 +415,11 @@ def main():
     print(f"\nDone: {run_count} succeeded, {fail_count} failed "
           f"({time.time() - start_wall:.0f}s wall)")
     if args.analyze:
-        analyze = Path(__file__).with_name("analyze-evaluations.py")
-        subprocess.run([sys.executable, str(analyze), str(base_dir)])
+        analyze = Path(__file__).parent / "analysis" / "analyze-evaluations.py"
+        rc = subprocess.run([sys.executable, str(analyze), str(base_dir)]).returncode
+        if rc != 0:
+            print(f"ERROR: analysis failed (exit {rc})", file=sys.stderr)
+            fail_count += 1
     sys.exit(1 if fail_count else 0)
 
 
