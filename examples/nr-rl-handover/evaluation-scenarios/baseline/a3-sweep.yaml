@@ -4,8 +4,8 @@
 # a3-sweep.yaml — A3 parameter sweep at the canonical cell (margin x TTT).
 # Purpose: choose/justify the tuned A3 baseline used in the RL-vs-A3
 # comparisons (baseline hygiene: A3 must not be naive). Margin {0,3,5} dB x
-# TTT {128,256,512} ms; the 0 dB row is the churn-contrast reference — the
-# "A3 collapse into a churn policy" note (KnowledgeBase §6a) becomes
+# TTT {128,256,512} ms; the 0 dB row is the churn-contrast reference. The
+# "A3 collapse into a churn policy" expectation becomes
 # measured data. m3-t256 == the default used by every baseline so far
 # (sanity cell).
 #

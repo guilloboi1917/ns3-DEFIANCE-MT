@@ -2,8 +2,7 @@
 
 Aerial-UE 5G-LENA handover scenario with RL agents (DEFIANCE + ns3-ai): the
 scenario behind the thesis's RL-vs-A3 evaluation campaign. This guide mirrors
-the machine the campaign ran on (Ubuntu 22.04 WSL2); a copy lives in the thesis
-knowledge base.
+the machine the campaign ran on (Ubuntu 22.04 WSL2).
 
 ## Pinned repositories
 
@@ -121,7 +120,6 @@ docs/                               local working notes (not committed)
 | Segfault in an ns3-ai simulation | no Python agent attached; use `run-agent train/debug/random` |
 | Deadlock after a crash | stale shared memory: `rm -f /dev/shm/ns3-ai_*` |
 | Results in the wrong place | results are cwd-relative; run from the example dir |
-| `Cannot TX while RX` fatal | 5G-LENA half-duplex edge case, seed-dependent; the runner marks the seed failed and the analyzer excludes it |
 
 ## Versions (campaign machine)
 
